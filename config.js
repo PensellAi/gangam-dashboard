@@ -10,5 +10,6 @@ window.GAMGAM_CONFIG = {
     appId: "1:397508532006:web:bdd4ee6b12fd2fd239d3e7"
   },
   storeUrl: "https://pensellai.github.io/gangam/",
-  adminUrl: "https://pensellai.github.io/gangam-dashboard/"
+  adminUrl: "https://pensellai.github.io/gangam-dashboard/",
+  pushUrl: "https://gangam-push.ahmedassemads.workers.dev"
 };

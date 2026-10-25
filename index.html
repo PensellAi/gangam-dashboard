@@ -6,6 +6,12 @@
 <meta name="robots" content="noindex">
 <title>Gangam Dashboard</title>
 <link rel="icon" href="images/logo-brown.webp">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0B46D0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gangam">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@400;500;600;700;800&family=Lalezar&display=swap">
@@ -202,8 +208,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 <div class="lightbox" id="lightbox" hidden><img id="lbImg" alt="سكرين التحويل"><button class="btn sec small" id="lbClose">اقفل</button></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="config.js?v=e582c29d"></script>
-<script src="core.js?v=ac181ec8"></script>
+<script src="config.js?v=40fef3c1"></script>
+<script src="core.js?v=bbc8d356"></script>
 <script>
 (function () {
   "use strict";
@@ -304,7 +310,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     else if (S.tab === "products") v.innerHTML = productsView();
     else if (S.tab === "bundles") v.innerHTML = bundlesView();
     else if (S.tab === "promos") v.innerHTML = promosView();
-    else v.innerHTML = settingsView();
+    else { v.innerHTML = settingsView(); refreshPush(); }
     markDirty();
   }
 
@@ -471,12 +477,41 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       '<div class="grid2"><label class="f">يوزر إنستاباي<input type="text" ' + at + ' data-f="instapayUser" value="' + esc(s.instapayUser) + '" dir="ltr" placeholder="name@instapay"></label>' +
       '<label class="f">لينك الدفع من إنستاباي<input type="url" ' + at + ' data-f="instapayLink" value="' + esc(s.instapayLink) + '" dir="ltr" placeholder="https://ipn.eg/S/..."><small>من أبلكيشن إنستاباي: Receive ← Payment link</small></label></div>' +
       '</div>' +
-      '<div class="head" style="margin-top:26px"><h2>إشعارات الموبايل</h2><p>مع كل طلب جديد بيوصلك إشعار على الموبايل فيه رقم الطلب والإجمالي وطريقة الدفع. بيانات العميل مش بتتبعت في الإشعار.</p></div>' +
-      '<div class="row" style="padding:16px;display:grid;gap:14px">' +
+      '<div class="head" style="margin-top:26px"><h2>إشعارات الموبايل</h2><p>مع كل طلب جديد بيوصلك إشعار باسم Gangam فيه رقم الطلب والإجمالي وطريقة الدفع، حتى والموبايل مقفول. بيانات العميل مش بتتبعت في الإشعار.</p></div>' +
+      '<div class="row" style="padding:16px;display:grid;gap:12px" id="pushBox">' + pushBoxHTML() + '</div>' +
+      '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--cocoa-2)">طريقة بديلة: أبلكيشن ntfy</summary>' +
+      '<div class="row" style="padding:16px;display:grid;gap:14px;margin-top:10px">' +
       '<ol style="margin:0;padding-inline-start:20px;display:grid;gap:6px"><li>نزّل أبلكيشن <b class="latin">ntfy</b> المجاني من Google Play أو App Store.</li><li>افتح الأبلكيشن ودوس <b>+</b> (Subscribe to topic).</li><li>اكتب اسم القناة اللي تحت بالظبط ودوس Subscribe.</li><li>دوس "ابعت إشعار تجريبي" وتأكد إنه وصلك.</li></ol>' +
       '<label class="f">اسم القناة<input type="text" ' + at + ' data-f="notifyTopic" value="' + esc(s.notifyTopic) + '" dir="ltr" autocomplete="off" spellcheck="false"><small>متغيّرهوش إلا لو حد غريب عرفه. لو غيّرته، احفظ واشترك في الاسم الجديد.</small></label>' +
       '<div><button class="btn sec small" data-act="testNotify">ابعت إشعار تجريبي</button></div>' +
-      '</div>';
+      '</div></details>';
+  }
+
+  /* ---------- phone notifications ---------- */
+  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  var standalone = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone;
+  function pushBoxHTML() {
+    var st = S.pushState || "checking";
+    var h = "";
+    if (isIOS && !standalone) {
+      return '<div class="warn">على الآيفون لازم تضيف لوحة التحكم للشاشة الرئيسية الأول: دوس زرار المشاركة في Safari ثم <b>Add to Home Screen</b>، وافتحها من الأيقونة وارجع هنا.</div>';
+    }
+    if (st === "unsupported") return '<p class="note">المتصفح ده مش بيدعم الإشعارات. افتح لوحة التحكم من Chrome على أندرويد، أو من الأيقونة على الآيفون.</p>';
+    if (st === "denied") return '<div class="warn">الإشعارات مقفولة للموقع ده من إعدادات المتصفح. افتح إعدادات الموقع (علامة القفل جنب اللينك) واسمح بالإشعارات، وبعدين ارجع هنا.</div>';
+    if (st === "on") h += '<div class="okbox">الإشعارات شغالة على الجهاز ده ✓</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sec small" data-act="pushTest">ابعت إشعار تجريبي</button><button class="btn danger small" data-act="pushOff">اقفل الإشعارات على الجهاز ده</button></div>';
+    else if (st === "checking") h += '<p class="note">بنشوف حالة الإشعارات...</p>';
+    else h += '<div><button class="btn" data-act="pushOn">فعّل الإشعارات على الجهاز ده</button></div><p class="note">فعّلها على كل موبايل أو كمبيوتر عايز يوصله إشعار، وكل أدمن على جهازه.</p>';
+    if (!standalone && !isIOS) h += '<p class="note">نصيحة: من قايمة Chrome (⋮) اختار <b>Install app</b> أو <b>Add to Home screen</b>، ولوحة التحكم هتتفتح زي أي أبلكيشن بأيقونة Gangam.</p>';
+    return h;
+  }
+  function refreshPush() {
+    api.pushState().then(function (st) { S.pushState = st; var b = $("pushBox"); if (b) b.innerHTML = pushBoxHTML(); });
+  }
+  if (!api.demo && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js", { scope: "./" }).catch(function () {});
+    navigator.serviceWorker.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "open" && e.data.url) { var h = e.data.url.split("#")[1]; if (h) { location.hash = h; var el = document.querySelector('[data-order="' + h + '"]'); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); } } }
+    });
   }
 
   /* ---------- editing ---------- */
@@ -532,6 +567,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     var t = e.target.closest("button, [data-shot]"); if (!t) return;
     var C = S.catalog;
     if (t.dataset.act === "refresh") return loadOrders();
+    if (t.dataset.act === "pushOn" || t.dataset.act === "pushOff" || t.dataset.act === "pushTest") {
+      var act = t.dataset.act; t.disabled = true;
+      var job = act === "pushOn" ? api.enablePush() : act === "pushOff" ? api.disablePush() : api.testPush();
+      job.then(function (j) {
+        toast(act === "pushOn" ? "الإشعارات اتفعّلت. جرّب إشعار تجريبي" : act === "pushOff" ? "الإشعارات اتقفلت على الجهاز ده" : (j && j.sent ? "اتبعت لـ " + j.sent + " جهاز" : "مفيش أجهزة متفعّل عليها الإشعارات"));
+      }, function (e) {
+        var m = e && e.message;
+        toast(m === "denied" ? "لازم توافق على الإشعارات علشان توصلك" : m === "unauthorized" ? "الحساب ده مش مسموحله بالإشعارات" : "حصلت مشكلة. جرّب تاني");
+      }).then(function () { refreshPush(); });
+      return;
+    }
     if (t.dataset.act === "browserNotify") { try { Notification.requestPermission().then(function () { render(); }); } catch (e) {} return; }
     if (t.dataset.act === "testNotify") {
       t.disabled = true;

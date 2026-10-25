@@ -1,4 +1,5 @@
 rules_version = '2';
+// Gangam store - Firestore security rules
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -9,11 +10,13 @@ service cloud.firestore {
         && request.auth.token.email.lower() in ['ahmedassemads@gmail.com', 'shepamohamed@gmail.com'];
     }
 
+    // Menu, prices and settings: anyone reads, only the admin writes
     match /catalog/{docId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
+    // Promo codes: a customer can check one code; only the admin can list or edit
     match /promos/{code} {
       allow get: if true;
       allow list, write: if isAdmin();
@@ -38,6 +41,7 @@ service cloud.firestore {
         && d.totals.total is number && d.totals.total > 0;
     }
 
+    // Orders: customers can only create; only the admin reads and changes status
     match /orders/{id} {
       allow create: if validOrder(id);
       allow read, delete: if isAdmin();
@@ -46,6 +50,19 @@ service cloud.firestore {
         && request.resource.data.status in ['new', 'confirmed', 'shipped', 'delivered', 'cancelled'];
     }
 
+    // Order pings: total, item count and payment method only; the push server reads one by id to confirm a real order
+    match /orderPings/{id} {
+      allow get: if true;
+      allow create: if request.resource.data.keys().hasOnly(['total', 'count', 'payment', 'createdAt'])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.total is number
+        && request.resource.data.count is number
+        && request.resource.data.payment in ['cod', 'vodafone', 'instapay']
+        && getAfter(/databases/$(database)/documents/orders/$(id)).data.totals.total == request.resource.data.total;
+      allow delete: if isAdmin();
+    }
+
+    // Payment screenshots: uploaded together with the order, only the admin reads
     match /orderShots/{id} {
       allow create: if request.resource.data.keys().hasOnly(['img'])
         && request.resource.data.img is string

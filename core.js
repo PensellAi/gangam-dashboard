@@ -206,6 +206,7 @@
     var r = Math.floor(Math.random() * 46656).toString(36).toUpperCase().padStart(3, "0");
     return "GG-" + t + r;
   }
+  function unb64u(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); }
   function tsToISO(v) { return v && v.toDate ? v.toDate().toISOString() : (v || ""); }
   function authError(e) {
     var c = (e && e.code) || "";
@@ -262,8 +263,14 @@
           totals: totals, status: "new", hasShot: !!shot, createdAt: F.fs.serverTimestamp()
         });
         if (shot) b.set(F.fs.doc(F.db, "orderShots", id), { img: shot });
+        // public, minimal record the push server checks before notifying (no customer data)
+        b.set(F.fs.doc(F.db, "orderPings", id), { total: totals.total, count: totals.count, payment: order.payment, createdAt: F.fs.serverTimestamp() });
         return b.commit();
-      }).then(function () { api.notifyNewOrder(catalog.settings, id, totals, order.payment); return { id: id, totals: totals }; });
+      }).then(function () {
+        api.notifyNewOrder(catalog.settings, id, totals, order.payment);
+        if (CFG.pushUrl) { try { fetch(CFG.pushUrl, { method: "POST", body: JSON.stringify({ action: "order", id: id }), keepalive: true }).catch(function () {}); } catch (e) {} }
+        return { id: id, totals: totals };
+      });
     },
     /* Push to the owner's phone through the free ntfy app. Only the order number,
      * total and payment method are sent; customer details stay in Firestore. */
@@ -377,6 +384,43 @@
       }, fail);
       return function () { stopped = true; if (unsub) unsub(); };
     },
+    /* ---------- phone notifications (Web Push through the gangam-push worker) ---------- */
+    pushSupported: function () { return !!(FB_CFG && CFG.pushUrl && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window); },
+    pushState: function () {
+      if (!api.pushSupported()) return Promise.resolve("unsupported");
+      if (Notification.permission === "denied") return Promise.resolve("denied");
+      return navigator.serviceWorker.getRegistration("./").then(function (reg) {
+        return reg ? reg.pushManager.getSubscription().then(function (s) { return s ? "on" : "off"; }) : "off";
+      });
+    },
+    enablePush: function () {
+      var reg;
+      return Notification.requestPermission().then(function (p) {
+        if (p !== "granted") throw new Error("denied");
+        return navigator.serviceWorker.register("sw.js", { scope: "./" });
+      }).then(function (r) { reg = r; return navigator.serviceWorker.ready; })
+        .then(function () { return fetch(CFG.pushUrl).then(function (r) { return r.json(); }); })
+        .then(function (j) {
+          return reg.pushManager.getSubscription().then(function (s) {
+            return s || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(j.publicKey) });
+          });
+        })
+        .then(function (sub) { return api._pushCall({ action: "subscribe", sub: sub.toJSON() }); });
+    },
+    disablePush: function () {
+      return navigator.serviceWorker.getRegistration("./").then(function (reg) { return reg && reg.pushManager.getSubscription(); })
+        .then(function (s) { if (!s) return; var ep = s.endpoint; return s.unsubscribe().then(function () { return api._pushCall({ action: "unsubscribe", endpoint: ep }); }); });
+    },
+    testPush: function () { return api._pushCall({ action: "test" }); },
+    _pushCall: function (body) {
+      return fb().then(function (F) {
+        if (!F.auth.currentUser) throw new Error("signed_out");
+        return F.auth.currentUser.getIdToken();
+      }).then(function (t) {
+        body.idToken = t;
+        return fetch(CFG.pushUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error || "push"); return j; });
+    },
     deleteOrder: function (id) {
       if (!FB_CFG) {
         lsSet("gg_orders", (lsGet("gg_orders") || []).filter(function (o) { return o.id !== id; }));
@@ -386,6 +430,7 @@
         var b = F.fs.writeBatch(F.db);
         b.delete(F.fs.doc(F.db, "orders", id));
         b.delete(F.fs.doc(F.db, "orderShots", id));
+        b.delete(F.fs.doc(F.db, "orderPings", id));
         return b.commit();
       });
     },
