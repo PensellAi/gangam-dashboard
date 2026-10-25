@@ -257,14 +257,36 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       function (e) { if (isDenied(e)) return denied(); toast("مقدرناش نحمّل المنتجات"); });
     loadOrders();
   }
+  /* orders stay live: a new order shows up by itself, with a sound and a browser notification */
   function loadOrders() {
-    S.loadingOrders = true; if (S.tab === "orders") render();
-    api.getOrders().then(function (o) { S.orders = o; }, function (e) { if (isDenied(e)) return denied(); toast("مقدرناش نحمّل الطلبات"); })
-      .then(function () {
-        S.loadingOrders = false; updateBadge(); if (S.tab === "orders") render();
-        var h = decodeURIComponent((location.hash || "").slice(1));
-        if (h && !S.jumped) { S.jumped = true; var el = document.querySelector('[data-order="' + h + '"]'); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); } }
+    if (S.unwatch) S.unwatch();
+    S.loadingOrders = true; S.seen = null; if (S.tab === "orders") render();
+    S.unwatch = api.watchOrders(function (list) {
+      var fresh = [];
+      if (S.seen) list.forEach(function (o) { if (!S.seen[o.id] && o.status === "new") fresh.push(o); });
+      S.seen = {}; list.forEach(function (o) { S.seen[o.id] = 1; });
+      S.orders = list; S.loadingOrders = false; updateBadge();
+      if (S.tab === "orders" && !document.activeElement.closest("#view select")) render();
+      if (fresh.length) announce(fresh);
+      var h = decodeURIComponent((location.hash || "").slice(1));
+      if (h && !S.jumped) { S.jumped = true; setTimeout(function () { var el = document.querySelector('[data-order="' + h + '"]'); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); } }, 50); }
+    }, function (e) { S.loadingOrders = false; if (isDenied(e)) return denied(); toast("مقدرناش نحمّل الطلبات"); });
+  }
+  function announce(list) {
+    var o = list[0];
+    toast(list.length > 1 ? "وصلك " + list.length + " طلبات جديدة" : "طلب جديد " + o.id + " · " + money(o.totals && o.totals.total));
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.18].forEach(function (d, i) {
+        var osc = ctx.createOscillator(), g = ctx.createGain();
+        osc.frequency.value = i ? 1046 : 784; osc.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + d); g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + d + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + d + 0.25); osc.start(ctx.currentTime + d); osc.stop(ctx.currentTime + d + 0.3);
       });
+    } catch (e) {}
+    try { if (window.Notification && Notification.permission === "granted") new Notification("طلب جديد " + o.id, { body: (o.customer && o.customer.name || "") + " · " + money(o.totals && o.totals.total), icon: "images/logo-brown.webp" }); } catch (e) {}
+    var title = document.title.replace(/^\(\d+\) /, ""); var n = S.orders.filter(function (x) { return x.status === "new"; }).length;
+    document.title = (n ? "(" + n + ") " : "") + title;
   }
   function updateBadge() { var n = S.orders.filter(function (o) { return o.status === "new"; }).length; $("newBadge").hidden = !n; $("newBadge").textContent = n; }
 
@@ -298,7 +320,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     var nNew = S.orders.filter(function (o) { return o.status === "new"; }).length;
     var list = S.filter === "all" ? S.orders : S.orders.filter(function (o) { return o.status === S.filter; });
     var h = (S.fresh ? '<div class="warn" style="margin-bottom:12px">المنتجات لسه متحفظتش على Firebase. ادخل أي تبويب ودوس "احفظ التعديلات" مرة واحدة علشان المتجر يبدأ يقرا منها.</div>' : "") +
-      '<div class="head"><h2>الطلبات</h2><button class="btn sec small" data-act="refresh">' + (S.loadingOrders ? "بنحدّث..." : "تحديث") + '</button></div>';
+      '<div class="head"><h2>الطلبات</h2>' + ((window.Notification && Notification.permission === "default") ? '<button class="btn sec small" data-act="browserNotify">نبّهني في المتصفح</button>' : '<span class="pill live">بتتحدث لوحدها</span>') + '</div>';
     h += '<div class="stats"><div class="stat"><b>' + nNew + '</b><span>طلبات جديدة</span></div><div class="stat"><b>' + money(todaySales) + '</b><span>مبيعات النهارده</span></div><div class="stat"><b>' + S.orders.length + '</b><span>كل الطلبات</span></div></div>';
     h += '<div class="filters">' + [{ id: "all", label: "الكل" }].concat(G.ORDER_STATUSES).map(function (s) {
       var c = s.id === "all" ? S.orders.length : S.orders.filter(function (o) { return o.status === s.id; }).length;
@@ -318,7 +340,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       '<select data-status="' + esc(o.id) + '" aria-label="حالة الطلب">' + G.ORDER_STATUSES.map(function (s) { return '<option value="' + s.id + '"' + (s.id === o.status ? " selected" : "") + '>' + s.label + '</option>'; }).join("") + '</select></div>' +
       '<div class="o-body">' +
         '<div><h4>العميل</h4><p><b>' + esc(c.name) + '</b></p><p class="latin num" style="text-align:right">' + esc(c.phone) + '</p><p>' + esc(c.address) + '</p>' + (c.notes ? '<p style="color:var(--cocoa-2)">ملاحظات: ' + esc(c.notes) + '</p>' : "") +
-          '<div class="o-actions"><a class="btn small wa" href="' + esc(custWa) + '" target="_blank" rel="noopener">كلّم العميل واتساب</a></div></div>' +
+          '<div class="o-actions"><a class="btn small wa" href="' + esc(custWa) + '" target="_blank" rel="noopener">كلّم العميل واتساب</a>' +
+          '<button class="btn danger small' + (S.armed === "o:" + o.id ? " armed" : "") + '" data-delorder="' + esc(o.id) + '">' + (S.armed === "o:" + o.id ? "متأكد؟ دوس تاني للمسح" : "امسح الطلب") + '</button></div></div>' +
         '<div><h4>الطلب · <span class="pill">' + esc(G.PAYMENT_LABELS[o.payment] || o.payment) + '</span></h4><ul class="o-lines">' +
           (t.lines || []).map(function (l) { return '<li><span>' + esc(l.name) + ' × ' + l.qty + '</span><span>' + money(l.total) + '</span></li>'; }).join("") +
           (t.discount ? '<li style="color:var(--green)"><span>خصم ' + esc(t.promo && t.promo.code) + '</span><span>-' + money(t.discount) + '</span></li>' : "") +
@@ -447,6 +470,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       '<label class="f">ملحوظة الشحن اللي بتظهر للعميل في الفاتورة<textarea ' + at + ' data-f="shippingNote">' + esc(s.shippingNote) + '</textarea><small>سيبها فاضية لو مش عايزها تظهر</small></label>' +
       '<div class="grid2"><label class="f">يوزر إنستاباي<input type="text" ' + at + ' data-f="instapayUser" value="' + esc(s.instapayUser) + '" dir="ltr" placeholder="name@instapay"></label>' +
       '<label class="f">لينك الدفع من إنستاباي<input type="url" ' + at + ' data-f="instapayLink" value="' + esc(s.instapayLink) + '" dir="ltr" placeholder="https://ipn.eg/S/..."><small>من أبلكيشن إنستاباي: Receive ← Payment link</small></label></div>' +
+      '</div>' +
+      '<div class="head" style="margin-top:26px"><h2>إشعارات الموبايل</h2><p>مع كل طلب جديد بيوصلك إشعار على الموبايل فيه رقم الطلب والإجمالي وطريقة الدفع. بيانات العميل مش بتتبعت في الإشعار.</p></div>' +
+      '<div class="row" style="padding:16px;display:grid;gap:14px">' +
+      '<ol style="margin:0;padding-inline-start:20px;display:grid;gap:6px"><li>نزّل أبلكيشن <b class="latin">ntfy</b> المجاني من Google Play أو App Store.</li><li>افتح الأبلكيشن ودوس <b>+</b> (Subscribe to topic).</li><li>اكتب اسم القناة اللي تحت بالظبط ودوس Subscribe.</li><li>دوس "ابعت إشعار تجريبي" وتأكد إنه وصلك.</li></ol>' +
+      '<label class="f">اسم القناة<input type="text" ' + at + ' data-f="notifyTopic" value="' + esc(s.notifyTopic) + '" dir="ltr" autocomplete="off" spellcheck="false"><small>متغيّرهوش إلا لو حد غريب عرفه. لو غيّرته، احفظ واشترك في الاسم الجديد.</small></label>' +
+      '<div><button class="btn sec small" data-act="testNotify">ابعت إشعار تجريبي</button></div>' +
       '</div>';
   }
 
@@ -503,6 +532,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     var t = e.target.closest("button, [data-shot]"); if (!t) return;
     var C = S.catalog;
     if (t.dataset.act === "refresh") return loadOrders();
+    if (t.dataset.act === "browserNotify") { try { Notification.requestPermission().then(function () { render(); }); } catch (e) {} return; }
+    if (t.dataset.act === "testNotify") {
+      t.disabled = true;
+      api.notifyNewOrder(S.catalog.settings, "", null, "", true).then(function (ok) { t.disabled = false; toast(ok ? "اتبعت. لو مشتركتش في القناة، اشترك وجرّب تاني" : "مقدرناش نبعت. اتأكد من اسم القناة والإنترنت"); });
+      return;
+    }
+    if (t.dataset.delorder) {
+      var oid = t.dataset.delorder;
+      if (S.armed !== "o:" + oid) { S.armed = "o:" + oid; return render(); }
+      S.armed = null; t.disabled = true; t.textContent = "بنمسح...";
+      api.deleteOrder(oid).then(function () {
+        S.orders = S.orders.filter(function (o) { return o.id !== oid; }); updateBadge(); render(); toast("الطلب " + oid + " اتمسح");
+      }, function () { toast("المسح فشل. جرّب تاني"); render(); });
+      return;
+    }
     if (t.dataset.filter) { S.filter = t.dataset.filter; return render(); }
     if (t.dataset.shot) {
       t.disabled = true; t.textContent = "بنحمّل...";

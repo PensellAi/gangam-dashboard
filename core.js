@@ -11,7 +11,8 @@
       instapayUser: "",
       instapayLink: "",
       shippingFee: 0,
-      shippingNote: "مصاريف الشحن بتختلف حسب المنطقة وبتبدأ من ١٥ ج.م"
+      shippingNote: "مصاريف الشحن بتختلف حسب المنطقة وبتبدأ من ١٥ ج.م",
+      notifyTopic: "gangam-1dnz926omo5tur"
     },
     products: [
       { id: "original", name: "Original", nameAr: "أوريجينال", desc: "شوكولاتة باللبن كلاسيك", tagline: "الكلاسيك عمره ما يخيب", price: 40, color: "#4B2BC8", image: "images/original.webp", active: true },
@@ -262,7 +263,22 @@
         });
         if (shot) b.set(F.fs.doc(F.db, "orderShots", id), { img: shot });
         return b.commit();
-      }).then(function () { return { id: id, totals: totals }; });
+      }).then(function () { api.notifyNewOrder(catalog.settings, id, totals, order.payment); return { id: id, totals: totals }; });
+    },
+    /* Push to the owner's phone through the free ntfy app. Only the order number,
+     * total and payment method are sent; customer details stay in Firestore. */
+    notifyNewOrder: function (settings, id, totals, payment, test) {
+      var topic = String((settings && settings.notifyTopic) || "").trim();
+      if (!/^[A-Za-z0-9_-]{6,64}$/.test(topic)) return Promise.resolve(false);
+      var adminUrl = (CFG.adminUrl || "").replace(/#.*$/, "");
+      var title = test ? "Gangam: إشعار تجريبي" : "طلب جديد " + id;
+      var body = test ? "الإشعارات شغالة. هيوصلك إشعار زي ده مع كل طلب جديد."
+        : "الإجمالي " + money(totals.total) + " · " + (PAYMENT_LABELS[payment] || payment) + " · " + totals.count + " قطعة";
+      var q = "?title=" + encodeURIComponent(title) + "&tags=chocolate_bar&priority=high" + (adminUrl ? "&click=" + encodeURIComponent(adminUrl + (test ? "" : "#" + id)) : "");
+      try {
+        return fetch("https://ntfy.sh/" + topic + q, { method: "POST", body: body, keepalive: true })
+          .then(function (r) { return r.ok; }, function () { return false; });
+      } catch (e) { return Promise.resolve(false); }
     },
 
     /* ---------- dashboard ---------- */
@@ -342,6 +358,35 @@
         return F.fs.getDocs(F.fs.query(F.fs.collection(F.db, "orders"), F.fs.orderBy("createdAt", "desc"), F.fs.limit(300)));
       }).then(function (s) {
         return s.docs.map(function (d) { var o = d.data(); o.id = d.id; o.createdAt = tsToISO(o.createdAt); return o; });
+      });
+    },
+    /* live order list for the dashboard; returns an unsubscribe function */
+    watchOrders: function (next, fail) {
+      if (!FB_CFG) {
+        var last = "";
+        var tick = function () { var l = lsGet("gg_orders") || []; var k = JSON.stringify(l); if (k !== last) { last = k; next(l); } };
+        tick(); var t = setInterval(tick, 3000);
+        return function () { clearInterval(t); };
+      }
+      var unsub = null, stopped = false;
+      fb().then(function (F) {
+        if (stopped) return;
+        unsub = F.fs.onSnapshot(F.fs.query(F.fs.collection(F.db, "orders"), F.fs.orderBy("createdAt", "desc"), F.fs.limit(300)), function (s) {
+          next(s.docs.map(function (d) { var o = d.data({ serverTimestamps: "estimate" }); o.id = d.id; o.createdAt = tsToISO(o.createdAt); return o; }));
+        }, fail);
+      }, fail);
+      return function () { stopped = true; if (unsub) unsub(); };
+    },
+    deleteOrder: function (id) {
+      if (!FB_CFG) {
+        lsSet("gg_orders", (lsGet("gg_orders") || []).filter(function (o) { return o.id !== id; }));
+        return Promise.resolve(true);
+      }
+      return fb().then(function (F) {
+        var b = F.fs.writeBatch(F.db);
+        b.delete(F.fs.doc(F.db, "orders", id));
+        b.delete(F.fs.doc(F.db, "orderShots", id));
+        return b.commit();
       });
     },
     getShot: function (id) {
