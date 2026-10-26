@@ -390,14 +390,14 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
     var t = o.totals || { lines: [] }, c = o.customer || {};
     var hasShot = o.hasShot || !!o.screenshot;
     var check = verifyOrder(o);
-    var custWa = G.whatsappLink(c.phone, "أهلاً " + (c.name || "") + "، معاك Gangam بخصوص طلبك رقم " + o.id);
+    var custWa = waLink(c.phone, "أهلاً " + (c.name || "") + "، معاك Gangam بخصوص طلبك رقم " + o.id);
     return '<article class="order" data-st="' + esc(o.status) + '" data-order="' + esc(o.id) + '">' +
       (check ? '<div class="warn" style="border-radius:0">' + esc(check) + '</div>' : "") +
       '<div class="o-head"><div><div class="o-id latin">' + esc(o.id) + '</div><div class="o-time">' + fmtTime(o.createdAt) + '</div></div>' +
       '<select data-status="' + esc(o.id) + '" aria-label="حالة الطلب">' + G.ORDER_STATUSES.map(function (s) { return '<option value="' + s.id + '"' + (s.id === o.status ? " selected" : "") + '>' + s.label + '</option>'; }).join("") + '</select></div>' +
       '<div class="o-body">' +
         '<div><h4>العميل</h4><p><b>' + esc(c.name) + '</b></p><p class="latin num" style="text-align:right">' + esc(c.phone) + '</p><p>' + esc(c.address) + '</p>' + (c.notes ? '<p style="color:var(--cocoa-2)">ملاحظات: ' + esc(c.notes) + '</p>' : "") +
-          '<div class="o-actions"><a class="btn small wa" href="' + esc(custWa) + '" target="_blank" rel="noopener">كلّم العميل واتساب</a>' +
+          '<div class="o-actions"><a class="btn small wa" href="' + esc(custWa) + '"' + (custWa.indexOf("intent:") === 0 ? "" : ' target="_blank" rel="noopener"') + '>كلّم العميل واتساب</a>' +
           '<button class="btn danger small' + (S.armed === "o:" + o.id ? " armed" : "") + '" data-delorder="' + esc(o.id) + '">' + (S.armed === "o:" + o.id ? "متأكد؟ دوس تاني للمسح" : "امسح الطلب") + '</button></div></div>' +
         '<div><h4>الطلب · <span class="pill">' + esc(G.PAYMENT_LABELS[o.payment] || o.payment) + '</span></h4><ul class="o-lines">' +
           (t.lines || []).map(function (l) { return '<li><span>' + esc(l.name) + ' × ' + l.qty + '</span><span>' + money(l.total) + '</span></li>'; }).join("") +
@@ -676,6 +676,8 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
       '<div class="grid2"><label class="f">يوزر إنستاباي<input type="text" ' + at + ' data-f="instapayUser" value="' + esc(s.instapayUser) + '" dir="ltr" placeholder="name@instapay"></label>' +
       '<label class="f">لينك الدفع من إنستاباي<input type="url" ' + at + ' data-f="instapayLink" value="' + esc(s.instapayLink) + '" dir="ltr" placeholder="https://ipn.eg/S/..."><small>من أبلكيشن إنستاباي: Receive ← Payment link</small></label></div>' +
       '</div>' +
+      '<div class="head" style="margin-top:26px"><h2>واتساب</h2><p>لما تدوس "كلّم العميل واتساب" من صفحة الطلبات، يفتح أنهي تطبيق. الاختيار ده بيتحفظ على الجهاز ده بس.</p></div>' +
+      '<div class="row" style="padding:16px;display:grid;gap:10px" id="waBox">' + waBoxHTML() + '</div>' +
       '<div class="head" style="margin-top:26px"><h2>تنبيه المخزون</h2><p>لما أي منتج متابع مخزونه يوصل للعدد ده أو أقل بعد طلب، بيوصلك إشعار زي: "تنبيه - باقي 5 قطع بس من Original". وبيوصلك إشعار تاني لو خلص خالص.</p></div>' +
       '<div class="row" style="padding:16px;display:grid;gap:12px"><label class="f">نبّهني لما يفضل<input type="number" min="0" max="999" step="1" ' + at + ' data-f="lowStockAlert" value="' + esc(s.lowStockAlert) + '" style="max-width:160px"><small>قطعة أو أقل. اكتب 0 لو مش عايز تنبيهات المخزون.</small></label></div>' +
       '<div class="head" style="margin-top:26px"><h2>إشعارات الموبايل</h2><p>مع كل طلب جديد بيوصلك إشعار باسم Gangam فيه رقم الطلب والإجمالي وطريقة الدفع، حتى والموبايل مقفول. بيانات العميل مش بتتبعت في الإشعار.</p></div>' +
@@ -686,6 +688,25 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
       '<label class="f">اسم القناة<input type="text" ' + at + ' data-f="notifyTopic" value="' + esc(s.notifyTopic) + '" dir="ltr" autocomplete="off" spellcheck="false"><small>متغيّرهوش إلا لو حد غريب عرفه. لو غيّرته، احفظ واشترك في الاسم الجديد.</small></label>' +
       '<div><button class="btn sec small" data-act="testNotify">ابعت إشعار تجريبي</button></div>' +
       '</div></details>';
+  }
+
+  /* ---------- which WhatsApp opens (per device) ---------- */
+  var isAndroid = /android/i.test(navigator.userAgent);
+  function waApp() { return G.lsGet("gg_wa_app") || "business"; }
+  function waLink(phone, text) {
+    var web = G.whatsappLink(phone, text);
+    if (!isAndroid || waApp() === "regular") return web;
+    // Android intent that targets WhatsApp Business; falls back to the normal link if it is not installed
+    var p = String(phone || "").replace(/\D/g, ""); if (p.indexOf("0") === 0) p = "2" + p;
+    return "intent://send/?phone=" + p + "&text=" + encodeURIComponent(text) + "#Intent;scheme=whatsapp;package=com.whatsapp.w4b;S.browser_fallback_url=" + encodeURIComponent(web) + ";end";
+  }
+  function waBoxHTML() {
+    var cur = waApp();
+    var h = '<div class="seg" role="group" aria-label="تطبيق واتساب">' +
+      [["business", "واتساب بيزنس"], ["regular", "واتساب العادي"]].map(function (o) { return '<button data-waapp="' + o[0] + '" aria-pressed="' + (cur === o[0]) + '">' + o[1] + '</button>'; }).join("") + '</div>';
+    if (isAndroid) h += '<p class="note">زرار "كلّم العميل واتساب" هيفتح التطبيق اللي تختاره على الموبايل ده.</p>';
+    else h += '<p class="note">على الآيفون والكمبيوتر المتصفح مش بيقدر يختار التطبيق، فاللينك بيفتح التطبيق الافتراضي. على الآيفون: لو عندك الاتنين، امسح واتساب العادي أو سجّل خروج منه علشان اللينكات تفتح في بيزنس.</p>';
+    return h;
   }
 
   /* ---------- phone notifications ---------- */
@@ -809,6 +830,7 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
       }, function () { toast("المسح فشل. جرّب تاني"); render(); });
       return;
     }
+    if (t.dataset.waapp) { G.lsSet("gg_wa_app", t.dataset.waapp); $("waBox").innerHTML = waBoxHTML(); toast(t.dataset.waapp === "business" ? "هيفتح واتساب بيزنس" : "هيفتح واتساب العادي"); return; }
     if (t.dataset.filter) { S.filter = t.dataset.filter; return render(); }
     if (t.dataset.repmode) { S.rep.mode = t.dataset.repmode; S.rep.data = null; return render(); }
     if (t.dataset.repnav !== undefined) {
