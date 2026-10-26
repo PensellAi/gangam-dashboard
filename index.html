@@ -150,6 +150,31 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .empty { text-align: center; padding: 40px 16px; background: var(--paper); border-radius: 18px; border: 2px dashed var(--line); color: var(--cocoa-2); }
 .empty strong { display: block; color: var(--cocoa); font-size: 18px; }
 
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--paper); border-radius: 16px; padding: 12px 14px; display: grid; gap: 2px; }
+.kpi span { font-size: 13px; color: var(--cocoa-2); }
+.kpi b { font-size: 22px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.kpi.profit b { color: var(--green); }
+.kpi.loss b { color: var(--danger); }
+.seg { display: inline-flex; background: var(--paper); border-radius: 999px; padding: 3px; box-shadow: inset 0 0 0 1.5px var(--line); }
+.seg button { border: 0; background: transparent; border-radius: 999px; padding: 6px 14px; font-weight: 700; color: var(--cocoa-2); }
+.seg button[aria-pressed="true"] { background: var(--cocoa); color: var(--cream); }
+.period { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.period strong { font-size: 18px; min-width: 120px; text-align: center; }
+.tbl-wrap { overflow-x: auto; background: var(--paper); border-radius: 16px; }
+table.rep { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14.5px; min-width: 560px; }
+table.rep th, table.rep td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.rep th { font-size: 13px; color: var(--cocoa-2); font-weight: 700; background: rgba(59,26,12,.03); }
+table.rep tr.empty-row td { color: #b4a596; }
+table.rep td.neg { color: var(--danger); font-weight: 700; }
+table.rep td.pos { color: var(--green); font-weight: 700; }
+.bar { height: 8px; border-radius: 4px; background: var(--blue); opacity: .75; min-width: 2px; }
+.section-title { font-weight: 800; font-size: 17px; margin: 20px 0 8px; }
+.stockpill { display: inline-block; border-radius: 999px; padding: 0 9px; font-size: 12.5px; font-weight: 700; background: rgba(44,154,28,.12); color: var(--green); }
+.stockpill.low { background: rgba(178,106,0,.12); color: var(--amber); }
+.stockpill.out { background: rgba(198,40,40,.12); color: var(--danger); }
+.exp-form { display: grid; grid-template-columns: 140px 1fr 120px; gap: 10px; align-items: end; }
+@media (max-width: 560px) { .exp-form { grid-template-columns: 1fr 1fr; } .exp-form .wide { grid-column: 1 / -1; } }
 .promo-row { display: grid; grid-template-columns: 1fr 90px auto 34px; gap: 8px; align-items: center; background: var(--paper); border-radius: 14px; padding: 8px 10px; }
 @media (max-width: 460px) { .promo-row { grid-template-columns: 1fr 74px; } .promo-row .switch { grid-column: 1; } }
 
@@ -198,6 +223,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       <button class="tab" role="tab" data-tab="products" aria-selected="false">المنتجات</button>
       <button class="tab" role="tab" data-tab="bundles" aria-selected="false">الباكدجات والعروض</button>
       <button class="tab" role="tab" data-tab="promos" aria-selected="false">أكواد الخصم</button>
+      <button class="tab" role="tab" data-tab="reports" aria-selected="false">التقارير والأرباح</button>
+      <button class="tab" role="tab" data-tab="expenses" aria-selected="false">المصاريف</button>
       <button class="tab" role="tab" data-tab="settings" aria-selected="false">الدفع والإعدادات</button>
     </div>
   </nav>
@@ -209,7 +236,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="config.js?v=40fef3c1"></script>
-<script src="core.js?v=bbc8d356"></script>
+<script src="core.js?v=48c9424d"></script>
 <script>
 (function () {
   "use strict";
@@ -218,7 +245,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
   var S = { pw: "", tab: "orders", catalog: null, saved: "", orders: [], filter: "all", open: {}, armed: null, loadingOrders: false };
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   var tT; function toast(m) { var t = $("toast"); t.textContent = m; t.classList.add("show"); clearTimeout(tT); tT = setTimeout(function () { t.classList.remove("show"); }, 2400); }
-  function dirty() { return S.catalog && (S.fresh || JSON.stringify(S.catalog) !== S.saved); }
+  function dirty() {
+    return S.catalog && (S.fresh || JSON.stringify(S.catalog) !== S.saved || JSON.stringify(S.stockDraft || {}) !== (S.savedStock || "{}") || JSON.stringify(S.costsDraft || {}) !== (S.savedCosts || "{}"));
+  }
+  var COUNTED = { confirmed: 1, shipped: 1, delivered: 1 };
+  function saleDate(o) { return new Date(o.confirmedAt || o.createdAt); }
+  function lineCost(l) {
+    var c = S.costsDraft || {};
+    if (l.type === "bundle") {
+      var b = G.bundleById(S.catalog, l.id); if (!b) return { cost: 0, missing: true };
+      var sum = 0, miss = false;
+      (b.items || []).forEach(function (it) { var v = c[it.productId]; if (!(v > 0)) miss = true; sum += G.num(v) * G.num(it.qty); });
+      return { cost: sum * G.num(l.qty), missing: miss };
+    }
+    var v = c[l.id];
+    return { cost: G.num(v) * G.num(l.qty), missing: !(v > 0) };
+  }
   function markDirty() { $("savebar").classList.toggle("show", !!dirty()); }
   function uid(prefix) { return prefix + "-" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
 
@@ -262,6 +304,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     api.adminCatalog().then(function (c) { S.fresh = !!c._fresh; delete c._fresh; S.catalog = c; S.saved = JSON.stringify(c); S.savedPromos = c.promos.map(function (p) { return p.code; }); render(); },
       function (e) { if (isDenied(e)) return denied(); toast("مقدرناش نحمّل المنتجات"); });
     loadOrders();
+    loadStockCosts();
+  }
+  function loadStockCosts() {
+    Promise.all([api.getStock(), api.getCosts()]).then(function (r) {
+      S.stockDraft = r[0]; S.savedStock = JSON.stringify(r[0]);
+      S.costsDraft = r[1]; S.savedCosts = JSON.stringify(r[1]);
+      if (S.tab === "products" || S.tab === "reports") render();
+    }, function (e) { if (isDenied(e)) return denied(); });
   }
   /* orders stay live: a new order shows up by itself, with a sound and a browser notification */
   function loadOrders() {
@@ -310,6 +360,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     else if (S.tab === "products") v.innerHTML = productsView();
     else if (S.tab === "bundles") v.innerHTML = bundlesView();
     else if (S.tab === "promos") v.innerHTML = promosView();
+    else if (S.tab === "reports") { v.innerHTML = reportsView(); loadReport(); }
+    else if (S.tab === "expenses") { v.innerHTML = expensesView(); loadExpenses(); }
     else { v.innerHTML = settingsView(); refreshPush(); }
     markDirty();
   }
@@ -321,13 +373,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
   }
   function ordersView() {
     var today = new Date().toDateString();
-    var live = S.orders.filter(function (o) { return o.status !== "cancelled"; });
-    var todaySales = live.filter(function (o) { return new Date(o.createdAt).toDateString() === today; }).reduce(function (a, o) { return a + G.num(o.totals && o.totals.total); }, 0);
+    var todaySales = S.orders.filter(function (o) { return COUNTED[o.status] && saleDate(o).toDateString() === today; }).reduce(function (a, o) { return a + G.num(o.totals && o.totals.total); }, 0);
     var nNew = S.orders.filter(function (o) { return o.status === "new"; }).length;
     var list = S.filter === "all" ? S.orders : S.orders.filter(function (o) { return o.status === S.filter; });
     var h = (S.fresh ? '<div class="warn" style="margin-bottom:12px">المنتجات لسه متحفظتش على Firebase. ادخل أي تبويب ودوس "احفظ التعديلات" مرة واحدة علشان المتجر يبدأ يقرا منها.</div>' : "") +
       '<div class="head"><h2>الطلبات</h2>' + ((window.Notification && Notification.permission === "default") ? '<button class="btn sec small" data-act="browserNotify">نبّهني في المتصفح</button>' : '<span class="pill live">بتتحدث لوحدها</span>') + '</div>';
-    h += '<div class="stats"><div class="stat"><b>' + nNew + '</b><span>طلبات جديدة</span></div><div class="stat"><b>' + money(todaySales) + '</b><span>مبيعات النهارده</span></div><div class="stat"><b>' + S.orders.length + '</b><span>كل الطلبات</span></div></div>';
+    h += '<div class="stats"><div class="stat"><b>' + nNew + '</b><span>طلبات جديدة</span></div><div class="stat"><b>' + money(todaySales) + '</b><span>مبيعات النهارده (المؤكدة)</span></div><div class="stat"><b>' + S.orders.length + '</b><span>كل الطلبات</span></div></div>';
     h += '<div class="filters">' + [{ id: "all", label: "الكل" }].concat(G.ORDER_STATUSES).map(function (s) {
       var c = s.id === "all" ? S.orders.length : S.orders.filter(function (o) { return o.status === s.id; }).length;
       return '<button class="chip" data-filter="' + s.id + '" aria-pressed="' + (S.filter === s.id) + '">' + s.label + ' <span class="num">' + c + '</span></button>';
@@ -383,7 +434,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       var open = S.open["p:" + p.id];
       return '<div class="row" style="--c:' + esc(p.color) + '"><div class="row-main">' +
         '<div class="thumb">' + (p.image ? '<img src="' + esc(p.image) + '" alt="">' : "") + '</div>' +
-        '<div class="row-title"><strong class="latin" style="text-align:right">' + esc(p.name || "منتج بدون اسم") + '</strong><span>' + money(p.price) + (p.nameAr ? " · " + esc(p.nameAr) : "") + '</span></div>' +
+        '<div class="row-title"><strong class="latin" style="text-align:right">' + esc(p.name || "منتج بدون اسم") + '</strong><span>' + money(p.price) + (p.nameAr ? " · " + esc(p.nameAr) : "") + ' ' + stockPill(p.id) + '</span></div>' +
         '<div class="row-tools"><label class="switch"><input type="checkbox" data-coll="products" data-i="' + i + '" data-f="active"' + (p.active ? " checked" : "") + '>' + (p.active ? "ظاهر" : "مخفي") + '</label>' +
         '<button class="icon" data-move="products:' + i + ':-1" aria-label="لفوق"' + (i === 0 ? " disabled" : "") + '>↑</button><button class="icon" data-move="products:' + i + ':1" aria-label="لتحت"' + (i === ps.length - 1 ? " disabled" : "") + '>↓</button>' +
         '<button class="btn sec small" data-toggle="p:' + esc(p.id) + '">' + (open ? "اقفل" : "تعديل") + '</button></div></div>' +
@@ -402,7 +453,155 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
         '<label class="f">لون الكارت<input type="color" ' + b + ' data-f="color" value="' + esc(p.color || "#0B46D0") + '" style="height:42px;width:100%;border:1.5px solid var(--line);border-radius:12px;padding:3px"></label>' +
       '</div>' +
       '<label class="f">المواصفات<textarea ' + b + ' data-f="desc">' + esc(p.desc) + '</textarea></label>' +
+      productStockCost(p) +
       '<div class="editor-foot"><span class="note">التعديل بيتطبق على المتجر بعد ما تدوس "احفظ التعديلات"</span><button class="btn danger small' + (S.armed === "p" + i ? " armed" : "") + '" data-del="products:' + i + '">' + (S.armed === "p" + i ? "متأكد؟ دوس تاني للمسح" : "امسح المنتج") + '</button></div></div>';
+  }
+
+  function stockPill(pid) {
+    var s = (S.stockDraft || {})[pid];
+    if (s === undefined || s === null) return "";
+    var n = G.num(s);
+    return '<span class="stockpill' + (n <= 0 ? " out" : n <= 5 ? " low" : "") + '">' + (n <= 0 ? "خلصان" : "متاح " + n) + '</span>';
+  }
+  function productStockCost(p) {
+    var st = (S.stockDraft || {})[p.id], tracked = st !== undefined && st !== null, cost = (S.costsDraft || {})[p.id];
+    var margin = cost > 0 ? G.num(p.price) - G.num(cost) : null;
+    return '<div class="grid2">' +
+      '<label class="f">تكلفة القطعة عليك (ج.م)<input type="number" min="0" step="0.5" data-xs="cost" data-pid="' + esc(p.id) + '" value="' + (cost > 0 ? esc(cost) : "") + '" placeholder="مثلاً 25"><small>' + (margin !== null ? "ربح القطعة: " + money(margin) : "مش بتظهر للعميل. بنحسب بيها الأرباح") + '</small></label>' +
+      '<div class="f" style="display:grid;gap:6px"><label class="switch"><input type="checkbox" data-xs="track" data-pid="' + esc(p.id) + '"' + (tracked ? " checked" : "") + '>تابع المخزون</label>' +
+      (tracked ? '<label class="f">الكمية المتاحة<input type="number" min="0" step="1" data-xs="stock" data-pid="' + esc(p.id) + '" value="' + esc(G.num(st)) + '"><small>لما توصل صفر، المنتج بيظهر "خلصان" ومحدش يقدر يطلبه</small></label>'
+        : '<small class="note">مقفول: المنتج متاح دايمًا من غير عدد</small>') + '</div></div>';
+  }
+
+  /* ---------- reports ---------- */
+  var AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function ymd(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function repRange() {
+    var r = S.rep, a = r.anchor;
+    if (r.mode === "day") { var s = new Date(a.getFullYear(), a.getMonth(), a.getDate()); return { from: s, to: new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1), label: s.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) }; }
+    if (r.mode === "year") return { from: new Date(a.getFullYear(), 0, 1), to: new Date(a.getFullYear() + 1, 0, 1), label: "سنة " + a.getFullYear() };
+    return { from: new Date(a.getFullYear(), a.getMonth(), 1), to: new Date(a.getFullYear(), a.getMonth() + 1, 1), label: AR_MONTHS[a.getMonth()] + " " + a.getFullYear() };
+  }
+  S.rep = { mode: "month", anchor: new Date(), data: null, loading: false };
+  function reportsView() {
+    var r = S.rep, R = repRange();
+    var h = '<div class="head"><h2>التقارير والأرباح</h2><p>المبيعات بتتحسب من الطلبات اللي حالتها اتأكد أو خرج للتوصيل أو اتسلّم، بتاريخ تأكيدها. الطلبات الجديدة والملغية مش داخلة.</p></div>';
+    h += '<div class="period"><div class="seg" role="group" aria-label="الفترة">' +
+      [["day", "يوم"], ["month", "شهر"], ["year", "سنة"]].map(function (m) { return '<button data-repmode="' + m[0] + '" aria-pressed="' + (r.mode === m[0]) + '">' + m[1] + '</button>'; }).join("") + '</div>' +
+      '<button class="icon" data-repnav="1" aria-label="اللي قبله">›</button><strong>' + esc(R.label) + '</strong><button class="icon" data-repnav="-1" aria-label="اللي بعده">‹</button>' +
+      '<button class="btn sec small" data-repnav="0">النهارده</button></div>';
+    if (!r.data || r.loading) return h + '<div class="empty"><strong>بنحسب...</strong></div>';
+    var d = r.data;
+    h += '<div class="kpis">' +
+      '<div class="kpi"><span>المبيعات</span><b>' + money(d.sales) + '</b></div>' +
+      '<div class="kpi"><span>تكلفة البضاعة المباعة</span><b>' + money(d.cogs) + '</b></div>' +
+      '<div class="kpi"><span>المصاريف</span><b>' + money(d.expenses) + '</b></div>' +
+      '<div class="kpi ' + (d.profit >= 0 ? "profit" : "loss") + '"><span>صافي الربح</span><b>' + money(d.profit) + '</b></div>' +
+      '<div class="kpi"><span>عدد الطلبات المؤكدة</span><b>' + d.count + '</b></div>' +
+      '<div class="kpi"><span>متوسط الطلب</span><b>' + money(d.count ? d.sales / d.count : 0) + '</b></div></div>';
+    if (d.missing.length) h += '<div class="warn" style="margin-bottom:12px">مفيش تكلفة متسجلة لـ: ' + esc(d.missing.join("، ")) + '. الربح هيبان أعلى من الحقيقي. سجّل التكلفة من تبويب المنتجات.</div>';
+    if (d.pending) h += '<p class="note" style="margin-bottom:10px">فيه ' + d.pending + ' طلب جديد مستني التأكيد بإجمالي ' + money(d.pendingTotal) + '، ومش داخل في الأرقام دي.</p>';
+    var allCount = 0, allTotal = 0;
+    G.ORDER_STATUSES.forEach(function (s) { allCount += d.byStatus[s.id].count; allTotal += d.byStatus[s.id].total; });
+    h += '<div class="section-title">الطلبات حسب الحالة <small class="note" style="font-weight:500">(اللي اتعملت في الفترة دي)</small></div>' +
+      '<div class="tbl-wrap"><table class="rep" style="min-width:0"><thead><tr><th>الحالة</th><th>العدد</th><th>إجمالي المبلغ</th></tr></thead><tbody>' +
+      G.ORDER_STATUSES.map(function (s) { var b = d.byStatus[s.id]; return '<tr><td><span class="pill">' + s.label + '</span></td><td>' + b.count + '</td><td>' + money(b.total) + '</td></tr>'; }).join("") +
+      '<tr><td><b>الكل</b></td><td><b>' + allCount + '</b></td><td><b>' + money(allTotal) + '</b></td></tr></tbody></table></div>';
+    var max = d.rows.reduce(function (m, x) { return Math.max(m, x.sales); }, 0) || 1;
+    var firstCol = r.mode === "year" ? "الشهر" : r.mode === "month" ? "اليوم" : "الطلب";
+    h += '<div class="section-title">' + (r.mode === "day" ? "طلبات اليوم" : r.mode === "month" ? "تقرير كل يوم" : "تقرير كل شهر") + '</div>';
+    h += '<div class="tbl-wrap"><table class="rep"><thead><tr><th>' + firstCol + '</th><th>الطلبات</th><th>المبيعات</th><th style="width:110px"></th><th>التكلفة</th><th>المصاريف</th><th>الربح</th></tr></thead><tbody>' +
+      d.rows.map(function (x) {
+        var empty = !x.count && !x.expenses;
+        return '<tr' + (empty ? ' class="empty-row"' : "") + '><td>' + esc(x.label) + '</td><td>' + x.count + '</td><td>' + money(x.sales) + '</td><td><div class="bar" style="width:' + Math.round(100 * x.sales / max) + '%"></div></td><td>' + money(x.cogs) + '</td><td>' + money(x.expenses) + '</td><td class="' + (empty ? "" : x.profit < 0 ? "neg" : "pos") + '">' + money(x.profit) + '</td></tr>';
+      }).join("") + '</tbody></table></div>';
+    if (d.top.length) {
+      h += '<div class="section-title">الأكثر مبيعًا</div><div class="tbl-wrap"><table class="rep"><thead><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th></tr></thead><tbody>' +
+        d.top.map(function (t) { return '<tr><td>' + esc(t.name) + '</td><td>' + t.qty + '</td><td>' + money(t.sales) + '</td></tr>'; }).join("") + '</tbody></table></div>';
+    }
+    return h;
+  }
+  function loadReport() {
+    var r = S.rep, R = repRange(), key = r.mode + R.from.toISOString();
+    if (r.key === key && r.data) return;
+    r.key = key; r.loading = true;
+    var lookback = new Date(R.from.getTime() - 45 * 864e5); // orders confirmed in this period may have been placed earlier
+    Promise.all([api.ordersBetween(lookback, R.to), api.expensesBetween(ymd(R.from), ymd(R.to))]).then(function (res) {
+      if (r.key !== key) return;
+      r.data = buildReport(res[0], res[1], R); r.loading = false;
+      if (S.tab === "reports") $("view").innerHTML = reportsView();
+    }, function (e) { r.loading = false; r.key = null; if (isDenied(e)) return denied(); toast("مقدرناش نحمّل التقرير"); });
+  }
+  function buildReport(orders, expenses, R) {
+    var mode = S.rep.mode, rows = [], idx = {};
+    function rowKey(d) { return mode === "year" ? d.getMonth() : d.getDate(); }
+    if (mode === "year") for (var m = 0; m < 12; m++) { idx[m] = rows.length; rows.push({ label: AR_MONTHS[m], count: 0, sales: 0, cogs: 0, expenses: 0 }); }
+    if (mode === "month") { var days = new Date(R.from.getFullYear(), R.from.getMonth() + 1, 0).getDate(); for (var dd = 1; dd <= days; dd++) { idx[dd] = rows.length; rows.push({ label: dd + " " + AR_MONTHS[R.from.getMonth()], count: 0, sales: 0, cogs: 0, expenses: 0 }); } }
+    var out = { sales: 0, cogs: 0, expenses: 0, count: 0, missing: [], pending: 0, pendingTotal: 0, rows: rows, top: [], byStatus: {} }, miss = {}, top = {};
+    G.ORDER_STATUSES.forEach(function (s) { out.byStatus[s.id] = { count: 0, total: 0 }; });
+    orders.forEach(function (o) {
+      var t = o.totals || {}, created = new Date(o.createdAt);
+      if (created >= R.from && created < R.to && out.byStatus[o.status]) { out.byStatus[o.status].count++; out.byStatus[o.status].total += G.num(t.total); }
+      if (o.status === "new" && created >= R.from && created < R.to) { out.pending++; out.pendingTotal += G.num(t.total); }
+      if (!COUNTED[o.status]) return;
+      var d = saleDate(o); if (!(d >= R.from && d < R.to)) return;
+      var cogs = 0;
+      (t.lines || []).forEach(function (l) {
+        var lc = lineCost(l); cogs += lc.cost; if (lc.missing) miss[l.name] = 1;
+        var k = l.type + ":" + l.id; top[k] = top[k] || { name: l.name, qty: 0, sales: 0 }; top[k].qty += G.num(l.qty); top[k].sales += G.num(l.total);
+      });
+      out.sales += G.num(t.total); out.cogs += cogs; out.count++;
+      if (mode === "day") rows.push({ label: o.id + " · " + d.toLocaleTimeString("ar-EG", { hour: "numeric", minute: "2-digit" }), count: 1, sales: G.num(t.total), cogs: cogs, expenses: 0 });
+      else { var row = rows[idx[rowKey(d)]]; row.count++; row.sales += G.num(t.total); row.cogs += cogs; }
+    });
+    expenses.forEach(function (x) {
+      out.expenses += G.num(x.amount);
+      if (mode === "day") return;
+      var p = x.date.split("-"), d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+      var row = rows[idx[rowKey(d)]]; if (row) row.expenses += G.num(x.amount);
+    });
+    if (mode === "day" && out.expenses) rows.push({ label: "مصاريف اليوم", count: 0, sales: 0, cogs: 0, expenses: out.expenses });
+    rows.forEach(function (x) { x.profit = x.sales - x.cogs - x.expenses; });
+    out.profit = out.sales - out.cogs - out.expenses;
+    out.missing = Object.keys(miss);
+    out.top = Object.keys(top).map(function (k) { return top[k]; }).sort(function (a, b) { return b.qty - a.qty; }).slice(0, 10);
+    return out;
+  }
+
+  /* ---------- expenses ---------- */
+  var EXP_CATS = ["خامات", "تغليف", "شحن وتوصيل", "إعلانات", "إيجار", "مرتبات", "أخرى"];
+  S.exp = { anchor: new Date(), list: null, key: null };
+  function expensesView() {
+    var a = S.exp.anchor, label = AR_MONTHS[a.getMonth()] + " " + a.getFullYear();
+    var h = '<div class="head"><h2>المصاريف</h2><p>أي فلوس بتصرفها على الشغل: خامات، تغليف، إعلانات، شحن. بتتخصم من المبيعات في التقارير علشان يطلعلك صافي الربح.</p></div>';
+    h += '<div class="row" style="padding:14px;margin-bottom:16px"><div class="exp-form">' +
+      '<label class="f">التاريخ<input type="date" id="exDate" value="' + ymd(new Date()) + '"></label>' +
+      '<label class="f">البند<select id="exCat">' + EXP_CATS.map(function (c) { return '<option>' + c + '</option>'; }).join("") + '</select></label>' +
+      '<label class="f">المبلغ (ج.م)<input type="number" min="0" step="0.5" id="exAmount" placeholder="0"></label>' +
+      '<label class="f wide" style="grid-column:1 / span 2">ملاحظة <small>(اختياري)</small><input type="text" id="exNote" placeholder="مثلاً: علب تغليف 100 قطعة"></label>' +
+      '<div class="wide"><button class="btn" data-act="addExpense" style="width:100%">ضيف المصروف</button></div>' +
+      '</div></div>';
+    h += '<div class="period"><button class="icon" data-expnav="1" aria-label="الشهر اللي قبله">›</button><strong>' + esc(label) + '</strong><button class="icon" data-expnav="-1" aria-label="الشهر اللي بعده">‹</button></div>';
+    var l = S.exp.list;
+    if (!l) return h + '<div class="empty"><strong>بنحمّل...</strong></div>';
+    if (!l.length) return h + '<div class="empty"><strong>مفيش مصاريف في الشهر ده</strong>ضيف أول مصروف من الفورم اللي فوق.</div>';
+    var total = l.reduce(function (s, x) { return s + G.num(x.amount); }, 0);
+    h += '<div class="kpis"><div class="kpi"><span>إجمالي مصاريف الشهر</span><b>' + money(total) + '</b></div></div>';
+    h += '<div class="tbl-wrap"><table class="rep"><thead><tr><th>التاريخ</th><th>البند</th><th>المبلغ</th><th>ملاحظة</th><th></th></tr></thead><tbody>' +
+      l.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).map(function (x) {
+        var armed = S.armed === "x:" + x.id;
+        return '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.category) + '</td><td>' + money(x.amount) + '</td><td style="white-space:normal">' + esc(x.note || "") + '</td><td><button class="btn danger small' + (armed ? " armed" : "") + '" data-delexp="' + esc(x.id) + '">' + (armed ? "متأكد؟" : "امسح") + '</button></td></tr>';
+      }).join("") + '</tbody></table></div>';
+    return h;
+  }
+  function loadExpenses(force) {
+    var a = S.exp.anchor, from = new Date(a.getFullYear(), a.getMonth(), 1), to = new Date(a.getFullYear(), a.getMonth() + 1, 1), key = ymd(from);
+    if (!force && S.exp.key === key && S.exp.list) return;
+    S.exp.key = key; S.exp.list = null;
+    api.expensesBetween(ymd(from), ymd(to)).then(function (l) {
+      if (S.exp.key !== key) return; S.exp.list = l; if (S.tab === "expenses") $("view").innerHTML = expensesView();
+    }, function (e) { if (isDenied(e)) return denied(); toast("مقدرناش نحمّل المصاريف"); });
   }
 
   /* ---------- bundles ---------- */
@@ -477,6 +676,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       '<div class="grid2"><label class="f">يوزر إنستاباي<input type="text" ' + at + ' data-f="instapayUser" value="' + esc(s.instapayUser) + '" dir="ltr" placeholder="name@instapay"></label>' +
       '<label class="f">لينك الدفع من إنستاباي<input type="url" ' + at + ' data-f="instapayLink" value="' + esc(s.instapayLink) + '" dir="ltr" placeholder="https://ipn.eg/S/..."><small>من أبلكيشن إنستاباي: Receive ← Payment link</small></label></div>' +
       '</div>' +
+      '<div class="head" style="margin-top:26px"><h2>تنبيه المخزون</h2><p>لما أي منتج متابع مخزونه يوصل للعدد ده أو أقل بعد طلب، بيوصلك إشعار زي: "تنبيه - باقي 5 قطع بس من Original". وبيوصلك إشعار تاني لو خلص خالص.</p></div>' +
+      '<div class="row" style="padding:16px;display:grid;gap:12px"><label class="f">نبّهني لما يفضل<input type="number" min="0" max="999" step="1" ' + at + ' data-f="lowStockAlert" value="' + esc(s.lowStockAlert) + '" style="max-width:160px"><small>قطعة أو أقل. اكتب 0 لو مش عايز تنبيهات المخزون.</small></label></div>' +
       '<div class="head" style="margin-top:26px"><h2>إشعارات الموبايل</h2><p>مع كل طلب جديد بيوصلك إشعار باسم Gangam فيه رقم الطلب والإجمالي وطريقة الدفع، حتى والموبايل مقفول. بيانات العميل مش بتتبعت في الإشعار.</p></div>' +
       '<div class="row" style="padding:16px;display:grid;gap:12px" id="pushBox">' + pushBoxHTML() + '</div>' +
       '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--cocoa-2)">طريقة بديلة: أبلكيشن ntfy</summary>' +
@@ -536,13 +737,26 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       if (el.dataset.coll === "bundles" && el.dataset.f === "price") refreshValueNote(Number(el.dataset.i));
     }
     if (el.dataset.item && el.tagName === "INPUT") { itemSet(el); markDirty(); }
+    if (el.dataset.xs === "cost") { var cv = Number(el.value); S.costsDraft = S.costsDraft || {}; if (cv > 0) S.costsDraft[el.dataset.pid] = cv; else delete S.costsDraft[el.dataset.pid]; markDirty(); }
+    if (el.dataset.xs === "stock") { S.stockDraft = S.stockDraft || {}; S.stockDraft[el.dataset.pid] = Math.max(0, Math.floor(Number(el.value) || 0)); markDirty(); }
   });
   $("view").addEventListener("change", function (e) {
     var el = e.target;
+    if (el.dataset.xs === "track") {
+      S.stockDraft = S.stockDraft || {};
+      if (el.checked) S.stockDraft[el.dataset.pid] = G.num((JSON.parse(S.savedStock || "{}"))[el.dataset.pid]) || 0; else delete S.stockDraft[el.dataset.pid];
+      render(); return;
+    }
     if (el.dataset.status) {
-      var id = el.dataset.status, st = el.value;
-      api.setOrderStatus(id, st).then(function () {
-        S.orders.forEach(function (o) { if (o.id === id) o.status = st; }); updateBadge(); render(); toast("اتحدثت حالة الطلب");
+      var id = el.dataset.status, st = el.value, ord = S.orders.find(function (o) { return o.id === id; }) || {}, old = ord.status;
+      var stamp = COUNTED[st] && !ord.confirmedAt;
+      api.setOrderStatus(id, st, stamp).then(function () {
+        ord.status = st; if (stamp) ord.confirmedAt = new Date().toISOString();
+        // a cancelled order gives its pieces back to stock; un-cancelling takes them again
+        var sign = (old !== "cancelled" && st === "cancelled") ? 1 : (old === "cancelled" && st !== "cancelled") ? -1 : 0;
+        if (sign) restock(ord, sign);
+        S.rep.key = null; updateBadge(); render();
+        toast(COUNTED[st] && !COUNTED[old] ? "اتأكد، والمبلغ اتحسب في المبيعات" : st === "cancelled" ? "اتلغى" + (sign ? "، والكمية رجعت للمخزون" : "") : "اتحدثت حالة الطلب");
       }, function () { toast("مقدرناش نحدّث الحالة"); render(); });
       return;
     }
@@ -588,12 +802,39 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
       var oid = t.dataset.delorder;
       if (S.armed !== "o:" + oid) { S.armed = "o:" + oid; return render(); }
       S.armed = null; t.disabled = true; t.textContent = "بنمسح...";
+      var delOrd = S.orders.find(function (o) { return o.id === oid; });
       api.deleteOrder(oid).then(function () {
-        S.orders = S.orders.filter(function (o) { return o.id !== oid; }); updateBadge(); render(); toast("الطلب " + oid + " اتمسح");
+        if (delOrd && delOrd.status !== "cancelled") restock(delOrd, 1);
+        S.orders = S.orders.filter(function (o) { return o.id !== oid; }); S.rep.key = null; updateBadge(); render(); toast("الطلب " + oid + " اتمسح");
       }, function () { toast("المسح فشل. جرّب تاني"); render(); });
       return;
     }
     if (t.dataset.filter) { S.filter = t.dataset.filter; return render(); }
+    if (t.dataset.repmode) { S.rep.mode = t.dataset.repmode; S.rep.data = null; return render(); }
+    if (t.dataset.repnav !== undefined) {
+      var n = Number(t.dataset.repnav), a = S.rep.anchor;
+      S.rep.anchor = n === 0 ? new Date() : S.rep.mode === "day" ? new Date(a.getFullYear(), a.getMonth(), a.getDate() - n) : S.rep.mode === "year" ? new Date(a.getFullYear() - n, 0, 1) : new Date(a.getFullYear(), a.getMonth() - n, 1);
+      S.rep.data = null; return render();
+    }
+    if (t.dataset.expnav) { var ea = S.exp.anchor; S.exp.anchor = new Date(ea.getFullYear(), ea.getMonth() - Number(t.dataset.expnav), 1); return render(); }
+    if (t.dataset.act === "addExpense") {
+      var amt = Number($("exAmount").value), dt = $("exDate").value;
+      if (!(amt > 0)) { toast("اكتب المبلغ"); return; }
+      if (!dt) { toast("اختار التاريخ"); return; }
+      t.disabled = true;
+      api.addExpense({ date: dt, category: $("exCat").value, amount: amt, note: $("exNote").value.trim() }).then(function () {
+        var p = dt.split("-"); S.exp.anchor = new Date(Number(p[0]), Number(p[1]) - 1, 1); S.rep.key = null;
+        toast("المصروف اتسجل"); loadExpenses(true); $("view").innerHTML = expensesView();
+      }, function (e) { t.disabled = false; toast(isDenied(e) ? "الحساب ده مش مسموحله" : "مقدرناش نسجّل المصروف"); });
+      return;
+    }
+    if (t.dataset.delexp) {
+      var xid = t.dataset.delexp;
+      if (S.armed !== "x:" + xid) { S.armed = "x:" + xid; $("view").innerHTML = expensesView(); return; }
+      S.armed = null;
+      api.deleteExpense(xid).then(function () { S.exp.list = S.exp.list.filter(function (x) { return x.id !== xid; }); S.rep.key = null; $("view").innerHTML = expensesView(); toast("اتمسح"); }, function () { toast("المسح فشل"); });
+      return;
+    }
     if (t.dataset.shot) {
       t.disabled = true; t.textContent = "بنحمّل...";
       api.getShot(t.dataset.shot).then(function (img) {
@@ -634,7 +875,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     C.products.forEach(function (p) {
       if (!p.name) errs.push("فيه منتج من غير اسم");
       if (p.active && !(p.price > 0)) errs.push("سعر " + (p.name || "منتج") + " لازم يكون أكبر من صفر");
-      if (!p.id || /^p-/.test(p.id)) { var s = slug(p.name); if (s && !C.products.some(function (o) { return o !== p && o.id === s; })) { C.bundles.forEach(function (b) { b.items.forEach(function (it) { if (it.productId === p.id) it.productId = s; }); }); p.id = s; } }
+      if (!p.id || /^p-/.test(p.id)) { var s = slug(p.name); if (s && !C.products.some(function (o) { return o !== p && o.id === s; })) {
+        C.bundles.forEach(function (b) { b.items.forEach(function (it) { if (it.productId === p.id) it.productId = s; }); });
+        [S.stockDraft, S.costsDraft].forEach(function (m) { if (m && m[p.id] !== undefined) { m[s] = m[p.id]; delete m[p.id]; } });
+        p.id = s; } }
     });
     C.bundles.forEach(function (b) { if (b.active && (!b.name || !b.items.length || !(b.price > 0))) errs.push((b.name || "باكدج من غير اسم") + ": محتاج اسم وسعر وقطعة واحدة على الأقل"); });
     var codes = {};
@@ -645,11 +889,33 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
     var errs = validate();
     if (errs.length) { toast(errs[0]); return; }
     $("save").disabled = true; $("save").textContent = "بنحفظ...";
-    api.saveCatalog(S.catalog, S.savedPromos).then(function () { S.saved = JSON.stringify(S.catalog); S.savedPromos = S.catalog.promos.map(function (p) { return p.code; }); S.fresh = false; toast("اتحفظ، والمتجر اتحدث"); render(); },
+    var ids = {}; S.catalog.products.forEach(function (p) { ids[p.id] = 1; });
+    var oldStock = JSON.parse(S.savedStock || "{}"), sd = S.stockDraft || {}, stockChanges = {};
+    Object.keys(sd).forEach(function (k) { if (!ids[k]) delete sd[k]; else if (oldStock[k] !== sd[k]) stockChanges[k] = sd[k]; });
+    Object.keys(oldStock).forEach(function (k) { if (sd[k] === undefined) stockChanges[k] = null; });
+    var cd = S.costsDraft || {}; Object.keys(cd).forEach(function (k) { if (!ids[k]) delete cd[k]; });
+    var costsChanged = JSON.stringify(cd) !== S.savedCosts;
+    api.saveCatalog(S.catalog, S.savedPromos)
+      .then(function () { return Object.keys(stockChanges).length ? api.saveStock(stockChanges) : null; })
+      .then(function () { return costsChanged ? api.saveCosts(cd) : null; })
+      .then(function () {
+        S.saved = JSON.stringify(S.catalog); S.savedPromos = S.catalog.promos.map(function (p) { return p.code; }); S.fresh = false;
+        S.savedStock = JSON.stringify(sd); S.savedCosts = JSON.stringify(cd); S.rep.key = null;
+        toast("اتحفظ، والمتجر اتحدث"); render(); },
       function (e) { toast(e && e.message === "storage_full" ? "المساحة على الجهاز خلصت. استخدم صور أصغر." : e && e.message === "too_big" ? "صور المنتجات كتير وكبيرة. ارفع صور أصغر." : isDenied(e) ? "الحساب ده مش مسموحله يعدّل." : "الحفظ فشل. جرّب تاني."); })
       .then(function () { $("save").disabled = false; $("save").textContent = "احفظ التعديلات"; });
   });
-  $("discard").addEventListener("click", function () { S.catalog = JSON.parse(S.saved); S.armed = null; render(); });
+  $("discard").addEventListener("click", function () { S.catalog = JSON.parse(S.saved); S.stockDraft = JSON.parse(S.savedStock || "{}"); S.costsDraft = JSON.parse(S.savedCosts || "{}"); S.armed = null; render(); });
+  function restock(order, sign) {
+    var needs = G.stockNeeds(S.catalog, order.cart || []), deltas = {};
+    Object.keys(needs).forEach(function (k) { deltas[k] = sign * needs[k]; });
+    var tracked = JSON.parse(S.savedStock || "{}");
+    api.adjustStock(deltas, tracked).then(function (did) {
+      if (!did) return;
+      Object.keys(deltas).forEach(function (k) { if (tracked[k] !== undefined) { tracked[k] = Math.max(0, tracked[k] + deltas[k]); if (S.stockDraft && S.stockDraft[k] !== undefined) S.stockDraft[k] = tracked[k]; } });
+      S.savedStock = JSON.stringify(tracked);
+    }, function () { toast("المخزون متحدثش. راجعه من تبويب المنتجات"); });
+  }
   window.addEventListener("beforeunload", function (e) { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
 })();
 </script>

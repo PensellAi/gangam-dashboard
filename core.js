@@ -12,7 +12,8 @@
       instapayLink: "",
       shippingFee: 0,
       shippingNote: "مصاريف الشحن بتختلف حسب المنطقة وبتبدأ من ١٥ ج.م",
-      notifyTopic: "gangam-1dnz926omo5tur"
+      notifyTopic: "gangam-1dnz926omo5tur",
+      lowStockAlert: 5
     },
     products: [
       { id: "original", name: "Original", nameAr: "أوريجينال", desc: "شوكولاتة باللبن كلاسيك", tagline: "الكلاسيك عمره ما يخيب", price: 40, color: "#4B2BC8", image: "images/original.webp", active: true },
@@ -113,6 +114,32 @@
       lines: lines, subtotal: round2(subtotal), promo: promo || null, discount: discount, shipping: shipping,
       total: round2(subtotal - discount + shipping), count: lines.reduce(function (a, l) { return a + l.qty; }, 0)
     };
+  }
+
+  /* units needed per product for a cart (bundles expand into their pieces) */
+  function stockNeeds(catalog, cart) {
+    var need = {};
+    function add(pid, n) { if (pid && n > 0) need[pid] = (need[pid] || 0) + n; }
+    (cart || []).forEach(function (c) {
+      var q = Math.max(0, Math.floor(num(c.qty)));
+      if (c.type === "bundle") {
+        var b = bundleById(catalog, c.id);
+        if (b) (b.items || []).forEach(function (it) { add(it.productId, q * Math.max(1, Math.floor(num(it.qty)))); });
+      } else add(c.id, q);
+    });
+    return need;
+  }
+  /* how many of a product or bundle can still be ordered; Infinity when stock is not tracked */
+  function availableFor(catalog, stock, type, id) {
+    if (!stock) return Infinity;
+    if (type === "bundle") {
+      var b = bundleById(catalog, id); if (!b) return 0;
+      return (b.items || []).reduce(function (m, it) {
+        var s = stock[it.productId]; if (s === undefined) return m;
+        return Math.min(m, Math.floor(num(s) / Math.max(1, num(it.qty))));
+      }, Infinity);
+    }
+    return stock[id] === undefined ? Infinity : Math.max(0, Math.floor(num(stock[id])));
   }
 
   function orderMessage(order, totals) {
@@ -236,6 +263,12 @@
           return c;
         });
     },
+    /* tracked stock as {productId: qty}; products without a stock record are unlimited */
+    getStock: function () {
+      if (!FB_CFG) return Promise.resolve(lsGet("gg_stock") || {});
+      return fb().then(function (F) { return F.fs.getDocs(F.fs.collection(F.db, "stock")); })
+        .then(function (s) { var m = {}; s.docs.forEach(function (d) { m[d.id] = num(d.data().qty); }); return m; });
+    },
     checkPromo: function (code) {
       code = String(code || "").trim().toUpperCase();
       if (!FB_CFG) return Promise.resolve(findPromo(api.cachedCatalog(), code));
@@ -248,7 +281,19 @@
       var catalog = api.cachedCatalog();
       var totals = computeTotals(catalog, order.cart, promo);
       var id = makeOrderId();
+      var needs = stockNeeds(catalog, order.cart);
+      function shortage(stockMap) {
+        var short = [];
+        Object.keys(needs).forEach(function (pid) {
+          if (stockMap[pid] !== undefined && num(stockMap[pid]) < needs[pid]) short.push({ id: pid, have: Math.max(0, num(stockMap[pid])) });
+        });
+        if (short.length) { var e = new Error("out_of_stock"); e.short = short; throw e; }
+      }
       if (!FB_CFG) {
+        var st = lsGet("gg_stock") || {};
+        try { shortage(st); } catch (e) { return Promise.reject(e); }
+        Object.keys(needs).forEach(function (pid) { if (st[pid] !== undefined) st[pid] = num(st[pid]) - needs[pid]; });
+        lsSet("gg_stock", st);
         var saved = Object.assign({}, order, { id: id, createdAt: new Date().toISOString(), status: "new", totals: totals, hasShot: !!shot, screenshot: shot || "" });
         var list = lsGet("gg_orders") || [];
         list.unshift(saved);
@@ -257,15 +302,23 @@
       }
       if (shot && shot.length > MAX_SHOT_CHARS) return Promise.reject(new Error("shot_too_big"));
       return fb().then(function (F) {
-        var b = F.fs.writeBatch(F.db);
-        b.set(F.fs.doc(F.db, "orders", id), {
-          customer: order.customer, payment: order.payment, cart: order.cart, promoCode: promo ? promo.code : "",
-          totals: totals, status: "new", hasShot: !!shot, createdAt: F.fs.serverTimestamp()
+        var pids = Object.keys(needs);
+        // one transaction: the order is saved only if every tracked item is still in stock
+        return F.fs.runTransaction(F.db, function (tx) {
+          return Promise.all(pids.map(function (p) { return tx.get(F.fs.doc(F.db, "stock", p)); })).then(function (snaps) {
+            var cur = {};
+            snaps.forEach(function (s, i) { if (s.exists()) cur[pids[i]] = num(s.data().qty); });
+            shortage(cur);
+            tx.set(F.fs.doc(F.db, "orders", id), {
+              customer: order.customer, payment: order.payment, cart: order.cart, promoCode: promo ? promo.code : "",
+              totals: totals, status: "new", hasShot: !!shot, createdAt: F.fs.serverTimestamp()
+            });
+            if (shot) tx.set(F.fs.doc(F.db, "orderShots", id), { img: shot });
+            // public, minimal record the push server checks before notifying (no customer data)
+            tx.set(F.fs.doc(F.db, "orderPings", id), { total: totals.total, count: totals.count, payment: order.payment, createdAt: F.fs.serverTimestamp() });
+            snaps.forEach(function (s, i) { if (s.exists()) tx.update(s.ref, { qty: Math.floor(cur[pids[i]] - needs[pids[i]]), lastOrder: id }); });
+          });
         });
-        if (shot) b.set(F.fs.doc(F.db, "orderShots", id), { img: shot });
-        // public, minimal record the push server checks before notifying (no customer data)
-        b.set(F.fs.doc(F.db, "orderPings", id), { total: totals.total, count: totals.count, payment: order.payment, createdAt: F.fs.serverTimestamp() });
-        return b.commit();
       }).then(function () {
         api.notifyNewOrder(catalog.settings, id, totals, order.payment);
         if (CFG.pushUrl) { try { fetch(CFG.pushUrl, { method: "POST", body: JSON.stringify({ action: "order", id: id }), keepalive: true }).catch(function () {}); } catch (e) {} }
@@ -379,7 +432,7 @@
       fb().then(function (F) {
         if (stopped) return;
         unsub = F.fs.onSnapshot(F.fs.query(F.fs.collection(F.db, "orders"), F.fs.orderBy("createdAt", "desc"), F.fs.limit(300)), function (s) {
-          next(s.docs.map(function (d) { var o = d.data({ serverTimestamps: "estimate" }); o.id = d.id; o.createdAt = tsToISO(o.createdAt); return o; }));
+          next(s.docs.map(function (d) { var o = d.data({ serverTimestamps: "estimate" }); o.id = d.id; o.createdAt = tsToISO(o.createdAt); o.confirmedAt = tsToISO(o.confirmedAt); return o; }));
         }, fail);
       }, fail);
       return function () { stopped = true; if (unsub) unsub(); };
@@ -421,6 +474,61 @@
         return fetch(CFG.pushUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error || "push"); return j; });
     },
+    /* ---------- stock, costs, expenses, reports (admin) ---------- */
+    saveStock: function (map) {
+      if (!FB_CFG) { var cur = {}; Object.keys(map).forEach(function (k) { if (map[k] !== null) cur[k] = Math.max(0, Math.floor(num(map[k]))); }); lsSet("gg_stock", cur); return Promise.resolve(true); }
+      return fb().then(function (F) {
+        var b = F.fs.writeBatch(F.db);
+        Object.keys(map).forEach(function (pid) {
+          var ref = F.fs.doc(F.db, "stock", pid);
+          if (map[pid] === null) b.delete(ref); else b.set(ref, { qty: Math.max(0, Math.floor(num(map[pid]))) });
+        });
+        return b.commit();
+      });
+    },
+    /* deltas {productId: +n | -n}; only touches products whose stock is tracked */
+    adjustStock: function (deltas, tracked) {
+      var ids = Object.keys(deltas).filter(function (k) { return deltas[k] && tracked && tracked[k] !== undefined; });
+      if (!ids.length) return Promise.resolve(false);
+      if (!FB_CFG) { var st = lsGet("gg_stock") || {}; ids.forEach(function (k) { if (st[k] !== undefined) st[k] = Math.max(0, num(st[k]) + deltas[k]); }); lsSet("gg_stock", st); return Promise.resolve(true); }
+      return fb().then(function (F) {
+        var b = F.fs.writeBatch(F.db);
+        ids.forEach(function (k) { b.update(F.fs.doc(F.db, "stock", k), { qty: F.fs.increment(deltas[k]) }); });
+        return b.commit();
+      }).then(function () { return true; });
+    },
+    getCosts: function () {
+      if (!FB_CFG) return Promise.resolve(lsGet("gg_costs") || {});
+      return fb().then(function (F) { return F.fs.getDoc(F.fs.doc(F.db, "private", "costs")); })
+        .then(function (s) { return (s.exists() && s.data().costs) || {}; });
+    },
+    saveCosts: function (costs) {
+      if (!FB_CFG) { lsSet("gg_costs", costs); return Promise.resolve(true); }
+      return fb().then(function (F) { return F.fs.setDoc(F.fs.doc(F.db, "private", "costs"), { costs: costs }); });
+    },
+    /* orders created in [from, to) — Date objects */
+    ordersBetween: function (from, to) {
+      if (!FB_CFG) return Promise.resolve((lsGet("gg_orders") || []).filter(function (o) { var d = new Date(o.createdAt); return d >= from && d < to; }));
+      return fb().then(function (F) {
+        return F.fs.getDocs(F.fs.query(F.fs.collection(F.db, "orders"), F.fs.where("createdAt", ">=", F.fs.Timestamp.fromDate(from)), F.fs.where("createdAt", "<", F.fs.Timestamp.fromDate(to)), F.fs.orderBy("createdAt", "asc")));
+      }).then(function (s) { return s.docs.map(function (d) { var o = d.data(); o.id = d.id; o.createdAt = tsToISO(o.createdAt); o.confirmedAt = tsToISO(o.confirmedAt); return o; }); });
+    },
+    /* expenses with date (YYYY-MM-DD) in [fromStr, toStr) */
+    expensesBetween: function (fromStr, toStr) {
+      if (!FB_CFG) return Promise.resolve((lsGet("gg_expenses") || []).filter(function (x) { return x.date >= fromStr && x.date < toStr; }));
+      return fb().then(function (F) {
+        return F.fs.getDocs(F.fs.query(F.fs.collection(F.db, "expenses"), F.fs.where("date", ">=", fromStr), F.fs.where("date", "<", toStr)));
+      }).then(function (s) { return s.docs.map(function (d) { var x = d.data(); x.id = d.id; return x; }); });
+    },
+    addExpense: function (x) {
+      var rec = { date: x.date, category: x.category, amount: num(x.amount), note: String(x.note || "").slice(0, 200) };
+      if (!FB_CFG) { var l = lsGet("gg_expenses") || []; rec.id = "e" + Date.now().toString(36); l.push(rec); lsSet("gg_expenses", l); return Promise.resolve(rec); }
+      return fb().then(function (F) { return F.fs.addDoc(F.fs.collection(F.db, "expenses"), rec); }).then(function (ref) { rec.id = ref.id; return rec; });
+    },
+    deleteExpense: function (id) {
+      if (!FB_CFG) { lsSet("gg_expenses", (lsGet("gg_expenses") || []).filter(function (x) { return x.id !== id; })); return Promise.resolve(true); }
+      return fb().then(function (F) { return F.fs.deleteDoc(F.fs.doc(F.db, "expenses", id)); });
+    },
     deleteOrder: function (id) {
       if (!FB_CFG) {
         lsSet("gg_orders", (lsGet("gg_orders") || []).filter(function (o) { return o.id !== id; }));
@@ -438,14 +546,19 @@
       if (!FB_CFG) { var o = (lsGet("gg_orders") || []).find(function (x) { return x.id === id; }); return Promise.resolve(o && o.screenshot || ""); }
       return fb().then(function (F) { return F.fs.getDoc(F.fs.doc(F.db, "orderShots", id)); }).then(function (s) { return s.exists() ? s.data().img : ""; });
     },
-    setOrderStatus: function (id, status) {
+    /* markConfirmed: stamp the moment the order became a sale (first time it is confirmed) */
+    setOrderStatus: function (id, status, markConfirmed) {
       if (!FB_CFG) {
         var list = lsGet("gg_orders") || [];
-        list.forEach(function (o) { if (o.id === id) o.status = status; });
+        list.forEach(function (o) { if (o.id === id) { o.status = status; if (markConfirmed) o.confirmedAt = new Date().toISOString(); } });
         lsSet("gg_orders", list);
         return Promise.resolve(true);
       }
-      return fb().then(function (F) { return F.fs.updateDoc(F.fs.doc(F.db, "orders", id), { status: status }); });
+      return fb().then(function (F) {
+        var upd = { status: status };
+        if (markConfirmed) upd.confirmedAt = F.fs.serverTimestamp();
+        return F.fs.updateDoc(F.fs.doc(F.db, "orders", id), upd);
+      });
     }
   };
 
@@ -455,6 +568,7 @@
     DEFAULT_CATALOG: DEFAULT_CATALOG, ORDER_STATUSES: ORDER_STATUSES, PAYMENT_LABELS: PAYMENT_LABELS,
     clone: clone, num: num, money: money, bundleLive: bundleLive, productById: productById, bundleById: bundleById,
     bundleItemsValue: bundleItemsValue, findPromo: findPromo, computeTotals: computeTotals, orderMessage: orderMessage,
+    stockNeeds: stockNeeds, availableFor: availableFor,
     whatsappLink: whatsappLink, compressImage: compressImage, lsGet: lsGet, lsSet: lsSet, todayISO: todayISO, api: api
   };
 })();

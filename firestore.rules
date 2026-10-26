@@ -46,7 +46,7 @@ service cloud.firestore {
       allow create: if validOrder(id);
       allow read, delete: if isAdmin();
       allow update: if isAdmin()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'confirmedAt'])
         && request.resource.data.status in ['new', 'confirmed', 'shipped', 'delivered', 'cancelled'];
     }
 
@@ -60,6 +60,26 @@ service cloud.firestore {
         && request.resource.data.payment in ['cod', 'vodafone', 'instapay']
         && getAfter(/databases/$(database)/documents/orders/$(id)).data.totals.total == request.resource.data.total;
       allow delete: if isAdmin();
+    }
+
+    // Stock per product: everyone reads; a customer's order may only lower it, inside the same transaction as the order
+    match /stock/{pid} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['qty', 'lastOrder'])
+        && request.resource.data.qty is int
+        && request.resource.data.qty >= 0
+        && request.resource.data.qty < resource.data.qty
+        && resource.data.qty - request.resource.data.qty <= 99
+        && getAfter(/databases/$(database)/documents/orders/$(request.resource.data.lastOrder)).data.createdAt == request.time;
+    }
+
+    // Product costs and expenses: admins only
+    match /private/{docId} {
+      allow read, write: if isAdmin();
+    }
+    match /expenses/{id} {
+      allow read, write: if isAdmin();
     }
 
     // Payment screenshots: uploaded together with the order, only the admin reads

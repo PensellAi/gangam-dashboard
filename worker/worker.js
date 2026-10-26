@@ -129,6 +129,50 @@ async function readPing(id) {
   const num = (v) => v ? Number(v.integerValue ?? v.doubleValue ?? 0) : 0;
   return { total: num(f.total), count: num(f.count), payment: f.payment ? f.payment.stringValue : "", createdAt: f.createdAt ? Date.parse(f.createdAt.timestampValue) : 0 };
 }
+/* ---------- low-stock alerts ---------- */
+const fsBase = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID + "/databases/(default)/documents/";
+const fsNum = (v) => v ? Number(v.integerValue ?? v.doubleValue ?? 0) : 0;
+async function readCatalog() {
+  const r = await fetch(fsBase + "catalog/main?key=" + API_KEY);
+  if (!r.ok) return { names: {}, threshold: 5 };
+  const f = (await r.json()).fields || {};
+  const names = {};
+  ((f.products && f.products.arrayValue && f.products.arrayValue.values) || []).forEach((v) => {
+    const p = (v.mapValue && v.mapValue.fields) || {};
+    const id = p.id && p.id.stringValue; if (!id) return;
+    const en = p.name ? p.name.stringValue : "", ar = p.nameAr ? p.nameAr.stringValue : "";
+    names[id] = ar && en ? en + " (" + ar + ")" : (en || ar || id);
+  });
+  const st = (f.settings && f.settings.mapValue && f.settings.mapValue.fields) || {};
+  const t = st.lowStockAlert ? fsNum(st.lowStockAlert) : 5;
+  return { names, threshold: t };
+}
+/* products this order brought down to the alert level; each level is announced once */
+async function lowStockAfter(env, orderId) {
+  const r = await fetch(fsBase + "stock?pageSize=300&key=" + API_KEY);
+  if (!r.ok) return [];
+  const docs = (await r.json()).documents || [];
+  const touched = docs.map((d) => ({ id: d.name.split("/").pop(), qty: fsNum(d.fields && d.fields.qty), last: d.fields && d.fields.lastOrder ? d.fields.lastOrder.stringValue : "" }))
+    .filter((x) => x.last === orderId);
+  if (!touched.length) return [];
+  const cat = await readCatalog();
+  if (!(cat.threshold > 0)) return [];
+  const alerts = [];
+  for (const x of touched) {
+    const key = "low:" + x.id;
+    if (x.qty > cat.threshold) { await env.KV.delete(key); continue; }
+    const prev = await env.KV.get(key);
+    if (prev !== null && Number(prev) <= x.qty) continue;
+    await env.KV.put(key, String(x.qty), { expirationTtl: 60 * 86400 });
+    alerts.push({ id: x.id, qty: x.qty, name: cat.names[x.id] || x.id });
+  }
+  return alerts;
+}
+function lowStockText(a) {
+  if (a.qty <= 0) return "تنبيه - " + a.name + " خلصت من المخزون";
+  return "تنبيه - باقي " + a.qty + (a.qty === 1 ? " قطعة" : a.qty <= 10 ? " قطع" : " قطعة") + " بس من " + a.name;
+}
+
 function money(n) { return (Math.round(n * 100) / 100).toLocaleString("en-US") + " ج.م"; }
 
 export default {
@@ -153,7 +197,10 @@ export default {
         body: "الإجمالي " + money(ping.total) + " · " + (PAYMENT[ping.payment] || ping.payment) + (ping.count ? " · " + ping.count + " قطعة" : ""),
         tag: id, url: DASHBOARD_URL + "#" + id,
       });
-      return json({ ok: true, ...res }, 200, origin);
+      let low = [];
+      try { low = await lowStockAfter(env, id); } catch (e) {}
+      for (const a of low) await pushAll(env, { title: a.qty <= 0 ? "المخزون خلص" : "المخزون قرب يخلص", body: lowStockText(a), tag: "stock-" + a.id, url: DASHBOARD_URL });
+      return json({ ok: true, ...res, lowStock: low.length }, 200, origin);
     }
 
     const email = await verifyAdmin(body.idToken);
