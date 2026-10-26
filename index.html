@@ -184,6 +184,13 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
 .savebar .btn { background: var(--pink); }
 .savebar .btn.sec { background: transparent; color: var(--cream); box-shadow: inset 0 0 0 1.5px rgba(255,245,232,.5); }
 
+.wapick { position: fixed; inset: 0; z-index: 65; background: rgba(20,8,2,.55); display: flex; align-items: flex-end; justify-content: center; }
+.wapick-card { width: 100%; max-width: 460px; background: var(--cream); border-radius: 22px 22px 0 0; padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 10px; }
+.wapick-card h3 { margin: 0 0 4px; font-family: var(--f-display); font-weight: 400; font-size: 24px; }
+.wapick-card a { justify-content: flex-start; gap: 12px; padding: 14px 16px; font-size: 17px; border-radius: 14px; }
+.wapick-card a.biz { background: #0B6E4F; color: #fff; }
+.wapick-card a.reg { background: #1FAF38; color: #fff; }
+.wapick-card label { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; color: var(--cocoa-2); }
 .lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(20,8,2,.85); display: grid; place-items: center; padding: 20px; }
 .lightbox img { max-height: 86vh; width: auto; border-radius: 12px; }
 .lightbox button { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); left: 12px; }
@@ -232,6 +239,15 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
 </div>
 
 <div class="savebar" id="savebar"><div class="wrap"><span>عندك تعديلات لسه متحفظتش</span><span style="display:flex;gap:8px"><button class="btn sec small" id="discard">تراجع</button><button class="btn" id="save">احفظ التعديلات</button></span></div></div>
+<div class="wapick" id="wapick" hidden>
+  <div class="wapick-card" role="dialog" aria-modal="true" aria-labelledby="wapickTitle">
+    <h3 id="wapickTitle">ابعت من أنهي واتساب؟</h3>
+    <a class="btn biz" id="wapickBiz" href="#">واتساب بيزنس</a>
+    <a class="btn reg" id="wapickReg" href="#">واتساب العادي</a>
+    <label><input type="checkbox" id="wapickRemember"> افتكر اختياري على الموبايل ده</label>
+    <button class="btn sec" type="button" id="wapickCancel">إلغاء</button>
+  </div>
+</div>
 <div class="lightbox" id="lightbox" hidden><img id="lbImg" alt="سكرين التحويل"><button class="btn sec small" id="lbClose">اقفل</button></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -390,14 +406,14 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
     var t = o.totals || { lines: [] }, c = o.customer || {};
     var hasShot = o.hasShot || !!o.screenshot;
     var check = verifyOrder(o);
-    var custWa = waLink(c.phone, "أهلاً " + (c.name || "") + "، معاك Gangam بخصوص طلبك رقم " + o.id);
+    var custWaBtn = waButton(c.phone, "أهلاً " + (c.name || "") + "، معاك Gangam بخصوص طلبك رقم " + o.id);
     return '<article class="order" data-st="' + esc(o.status) + '" data-order="' + esc(o.id) + '">' +
       (check ? '<div class="warn" style="border-radius:0">' + esc(check) + '</div>' : "") +
       '<div class="o-head"><div><div class="o-id latin">' + esc(o.id) + '</div><div class="o-time">' + fmtTime(o.createdAt) + '</div></div>' +
       '<select data-status="' + esc(o.id) + '" aria-label="حالة الطلب">' + G.ORDER_STATUSES.map(function (s) { return '<option value="' + s.id + '"' + (s.id === o.status ? " selected" : "") + '>' + s.label + '</option>'; }).join("") + '</select></div>' +
       '<div class="o-body">' +
         '<div><h4>العميل</h4><p><b>' + esc(c.name) + '</b></p><p class="latin num" style="text-align:right">' + esc(c.phone) + '</p><p>' + esc(c.address) + '</p>' + (c.notes ? '<p style="color:var(--cocoa-2)">ملاحظات: ' + esc(c.notes) + '</p>' : "") +
-          '<div class="o-actions"><a class="btn small wa" href="' + esc(custWa) + '"' + (custWa.indexOf("intent:") === 0 ? "" : ' target="_blank" rel="noopener"') + '>كلّم العميل واتساب</a>' +
+          '<div class="o-actions">' + custWaBtn +
           '<button class="btn danger small' + (S.armed === "o:" + o.id ? " armed" : "") + '" data-delorder="' + esc(o.id) + '">' + (S.armed === "o:" + o.id ? "متأكد؟ دوس تاني للمسح" : "امسح الطلب") + '</button></div></div>' +
         '<div><h4>الطلب · <span class="pill">' + esc(G.PAYMENT_LABELS[o.payment] || o.payment) + '</span></h4><ul class="o-lines">' +
           (t.lines || []).map(function (l) { return '<li><span>' + esc(l.name) + ' × ' + l.qty + '</span><span>' + money(l.total) + '</span></li>'; }).join("") +
@@ -692,19 +708,38 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
 
   /* ---------- which WhatsApp opens (per device) ---------- */
   var isAndroid = /android/i.test(navigator.userAgent);
-  function waApp() { return G.lsGet("gg_wa_app") || "business"; }
-  function waLink(phone, text) {
+  function waApp() { return G.lsGet("gg_wa_app") || "ask"; }
+  // Android intent that opens a specific WhatsApp app; falls back to the normal link if that app is not installed
+  function waIntent(phone, text, pkg) {
     var web = G.whatsappLink(phone, text);
-    if (!isAndroid || waApp() === "regular") return web;
-    // Android intent that targets WhatsApp Business; falls back to the normal link if it is not installed
     var p = String(phone || "").replace(/\D/g, ""); if (p.indexOf("0") === 0) p = "2" + p;
-    return "intent://send/?phone=" + p + "&text=" + encodeURIComponent(text) + "#Intent;scheme=whatsapp;package=com.whatsapp.w4b;S.browser_fallback_url=" + encodeURIComponent(web) + ";end";
+    return "intent://send/?phone=" + p + "&text=" + encodeURIComponent(text) + "#Intent;scheme=whatsapp;package=" + pkg + ";S.browser_fallback_url=" + encodeURIComponent(web) + ";end";
   }
+  function waButton(phone, text) {
+    var web = G.whatsappLink(phone, text), mode = waApp();
+    if (!isAndroid) return '<a class="btn small wa" href="' + esc(web) + '" target="_blank" rel="noopener">كلّم العميل واتساب</a>';
+    var biz = waIntent(phone, text, "com.whatsapp.w4b"), reg = waIntent(phone, text, "com.whatsapp");
+    if (mode === "business") return '<a class="btn small wa" href="' + esc(biz) + '">كلّم العميل واتساب</a>';
+    if (mode === "regular") return '<a class="btn small wa" href="' + esc(reg) + '">كلّم العميل واتساب</a>';
+    return '<button type="button" class="btn small wa" data-wapick="1" data-biz="' + esc(biz) + '" data-reg="' + esc(reg) + '">كلّم العميل واتساب</button>';
+  }
+  function openWaPick(biz, reg) {
+    $("wapickBiz").href = biz; $("wapickReg").href = reg; $("wapickRemember").checked = false;
+    $("wapick").hidden = false; $("wapickBiz").focus();
+  }
+  function closeWaPick() { $("wapick").hidden = true; }
+  $("wapickCancel").addEventListener("click", closeWaPick);
+  $("wapick").addEventListener("click", function (e) {
+    if (e.target === $("wapick")) return closeWaPick();
+    var a = e.target.closest("a"); if (!a) return;
+    if ($("wapickRemember").checked) G.lsSet("gg_wa_app", a.id === "wapickBiz" ? "business" : "regular");
+    setTimeout(function () { closeWaPick(); if ($("wapickRemember").checked && S.tab === "orders") render(); }, 300);
+  });
   function waBoxHTML() {
     var cur = waApp();
     var h = '<div class="seg" role="group" aria-label="تطبيق واتساب">' +
-      [["business", "واتساب بيزنس"], ["regular", "واتساب العادي"]].map(function (o) { return '<button data-waapp="' + o[0] + '" aria-pressed="' + (cur === o[0]) + '">' + o[1] + '</button>'; }).join("") + '</div>';
-    if (isAndroid) h += '<p class="note">زرار "كلّم العميل واتساب" هيفتح التطبيق اللي تختاره على الموبايل ده.</p>';
+      [["ask", "اسألني كل مرة"], ["business", "بيزنس"], ["regular", "العادي"]].map(function (o) { return '<button data-waapp="' + o[0] + '" aria-pressed="' + (cur === o[0]) + '">' + o[1] + '</button>'; }).join("") + '</div>';
+    if (isAndroid) h += '<p class="note">"اسألني كل مرة": لما تدوس الزرار بيظهرلك اختيار بيزنس أو العادي. أو اختار واحد ثابت يفتح على طول.</p>';
     else h += '<p class="note">على الآيفون والكمبيوتر المتصفح مش بيقدر يختار التطبيق، فاللينك بيفتح التطبيق الافتراضي. على الآيفون: لو عندك الاتنين، امسح واتساب العادي أو سجّل خروج منه علشان اللينكات تفتح في بيزنس.</p>';
     return h;
   }
@@ -830,7 +865,8 @@ table.rep td.pos { color: var(--green); font-weight: 700; }
       }, function () { toast("المسح فشل. جرّب تاني"); render(); });
       return;
     }
-    if (t.dataset.waapp) { G.lsSet("gg_wa_app", t.dataset.waapp); $("waBox").innerHTML = waBoxHTML(); toast(t.dataset.waapp === "business" ? "هيفتح واتساب بيزنس" : "هيفتح واتساب العادي"); return; }
+    if (t.dataset.wapick) { openWaPick(t.dataset.biz, t.dataset.reg); return; }
+    if (t.dataset.waapp) { G.lsSet("gg_wa_app", t.dataset.waapp); $("waBox").innerHTML = waBoxHTML(); toast(t.dataset.waapp === "business" ? "هيفتح واتساب بيزنس على طول" : t.dataset.waapp === "regular" ? "هيفتح واتساب العادي على طول" : "هيسألك كل مرة"); return; }
     if (t.dataset.filter) { S.filter = t.dataset.filter; return render(); }
     if (t.dataset.repmode) { S.rep.mode = t.dataset.repmode; S.rep.data = null; return render(); }
     if (t.dataset.repnav !== undefined) {
